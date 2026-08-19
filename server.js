@@ -343,7 +343,7 @@ app.get('/api/activity-log', async (req, res) => {
   }
 });
 
-app.get('/api/visits/:id', async (req, res) => {
+app.get('/api/visits/:id(\\d+)', async (req, res) => {
   try {
     const { rows } = await pool.query('SELECT * FROM visits WHERE id = $1', [req.params.id]);
     if (!rows[0]) return res.status(404).json({ error: 'Not found' });
