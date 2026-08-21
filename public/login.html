@@ -17,7 +17,7 @@
     <p class="subtitle" style="margin:0">Select this station to sign in.</p>
   </div>
 
-  <div class="login-grid" id="stationGrid"></div>
+  <div id="stationGroups"></div>
 
   <p style="text-align:center;color:var(--ink-soft);font-size:12px;margin-top:24px">
     This just picks which screen you're using — no password needed.
@@ -45,9 +45,28 @@ async function init() {
     return '/';
   };
 
-  const grid = document.getElementById('stationGrid');
-  grid.innerHTML = stations.map(s => `<button class="login-btn" data-station="${s}">${s}</button>`).join('');
-  grid.querySelectorAll('[data-station]').forEach(btn => {
+  const groups = [
+    { label: 'Front Desk', match: (s) => s === 'Upfront' },
+    { label: 'Operatories', match: (s) => /^OP\d+$/.test(s) },
+    { label: 'Other', match: (s) => true },
+  ];
+
+  const container = document.getElementById('stationGroups');
+  container.innerHTML = groups.map((g) => {
+    const remaining = stations.filter((s) => g.match(s) && !groups.slice(0, groups.indexOf(g)).some((prev) => prev.match(s)));
+    if (!remaining.length) return '';
+    const gridHtml = remaining.length === 1
+      ? `<div style="max-width:200px;margin:0 auto"><button class="login-btn" data-station="${remaining[0]}" style="width:100%">${remaining[0]}</button></div>`
+      : `<div class="login-grid">${remaining.map((s) => `<button class="login-btn" data-station="${s}">${s}</button>`).join('')}</div>`;
+    return `
+      <div style="margin-bottom:28px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);margin-bottom:10px;text-align:center">${g.label}</div>
+        ${gridHtml}
+      </div>
+    `;
+  }).join('');
+
+  container.querySelectorAll('[data-station]').forEach(btn => {
     btn.addEventListener('click', () => {
       const s = btn.dataset.station;
       setStation(s);
