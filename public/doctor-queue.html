@@ -59,6 +59,7 @@ function render(queue) {
           <div style="font-size:20px;font-weight:700">Patient ${escapeHtml(v.patientId)}</div>
           ${editButtonHtml(v.id)}
         </div>
+        ${v.treatmentFlag ? `<div style="margin-bottom:10px">${treatmentBadgeHtml(true)}</div>` : ''}
         <span class="pill pill-${level}">Waiting for Doctor</span>
         <div class="timer timer-lg timer-${level}" style="margin-top:14px">${fmtDuration(v.currentWaitSeconds)}</div>
       </div>

@@ -36,6 +36,7 @@
           <th>Waiting For</th>
           <th>Current Wait</th>
           <th>Total Idle Time</th>
+          <th>Flag</th>
           <th></th>
         </tr>
       </thead>
@@ -78,6 +79,7 @@ function render(visits) {
         <td>${isWaiting ? escapeHtml(WAITING_FOR_LABEL[v.waitingFor] || v.waitingFor) : '<span class="pill pill-neutral">With Staff</span>'}</td>
         <td><span class="timer timer-md timer-${level}">${isWaiting ? fmtDuration(v.currentWaitSeconds) : '—'}</span></td>
         <td><span class="timer timer-sm" style="color:var(--ink-soft)">${fmtDuration(v.totalIdleSeconds)}</span></td>
+        <td>${flagButtonHtml(v.id, v.treatmentFlag)}</td>
         <td>${editButtonHtml(v.id)}</td>
       </tr>
     `;

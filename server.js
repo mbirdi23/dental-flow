@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const pool = require('./db/pool');
-const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, STATIONS, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS } = require('./lib/flow');
+const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, FULL_NEXT_ACTION, STATIONS, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS } = require('./lib/flow');
 
 const app = express();
 app.use(express.json());
@@ -212,7 +212,7 @@ app.post('/api/visits/:id/transition', async (req, res) => {
 // activity_log entry so it's clear who changed what.
 app.post('/api/visits/:id/override', async (req, res) => {
   const visitId = parseInt(req.params.id, 10);
-  const { patientId, status, operatory, role } = req.body;
+  const { patientId, status, operatory, treatmentFlag, role } = req.body;
 
   const client = await pool.connect();
   try {
@@ -292,6 +292,12 @@ app.post('/api/visits/:id/override', async (req, res) => {
       setParts.push(`completed_at = ${status === 'completed' ? 'now()' : 'NULL'}`);
     }
 
+    if (typeof treatmentFlag === 'boolean' && treatmentFlag !== visit.treatment_flag) {
+      changes.push(treatmentFlag ? 'Flagged for treatment (longer visit expected)' : 'Treatment flag removed');
+      setParts.push(`treatment_flag = $${idx++}`);
+      params.push(treatmentFlag);
+    }
+
     let updatedVisit = visit;
     if (setParts.length) {
       const { rows: updatedRows } = await client.query(
@@ -303,17 +309,17 @@ app.post('/api/visits/:id/override', async (req, res) => {
 
     if (changes.length) {
       const isCancel = status === 'cancelled';
+      const isFlagOnly = !isCancel && changes.length === 1 && typeof treatmentFlag === 'boolean';
+      const action = isCancel ? 'cancel_visit' : isFlagOnly ? 'toggle_flag' : 'manual_edit';
+      const label = isCancel
+        ? ACTION_LABEL.cancel_visit
+        : isFlagOnly
+        ? (treatmentFlag ? 'Flagged for Treatment' : 'Treatment Flag Removed')
+        : ACTION_LABEL.manual_edit;
       await client.query(
         `INSERT INTO activity_log (visit_id, patient_id, station, action, label, details)
          VALUES ($1, $2, $3, $4, $5, $6)`,
-        [
-          visitId,
-          updatedVisit.patient_id,
-          role || 'Unknown',
-          isCancel ? 'cancel_visit' : 'manual_edit',
-          isCancel ? ACTION_LABEL.cancel_visit : ACTION_LABEL.manual_edit,
-          changes.join('; '),
-        ]
+        [visitId, updatedVisit.patient_id, role || 'Unknown', action, label, changes.join('; ')]
       );
     }
 
@@ -360,7 +366,7 @@ app.get('/api/visits/:id(\\d+)', async (req, res) => {
 async function fetchActiveVisits() {
   const { rows } = await pool.query(`
     SELECT
-      v.id, v.patient_id, v.operatory, v.status, v.started_at,
+      v.id, v.patient_id, v.operatory, v.status, v.started_at, v.treatment_flag,
       COALESCE(closed.total_seconds, 0)::int AS closed_idle_seconds,
       open.gap_number AS open_gap_number,
       open.waiting_for AS open_waiting_for,
@@ -389,11 +395,13 @@ async function fetchActiveVisits() {
       operatory: r.operatory,
       status: r.status,
       startedAt: r.started_at,
+      treatmentFlag: r.treatment_flag,
       waitingFor: r.open_waiting_for, // null if currently with a staff member
       currentWaitSeconds,
       totalIdleSeconds: r.closed_idle_seconds + currentWaitSeconds,
       nextAction: NEXT_ACTION[r.status] || null,
       tcNextAction: TC_NEXT_ACTION[r.status] || null,
+      fullNextAction: FULL_NEXT_ACTION[r.status] || null,
     };
   });
 }
@@ -658,6 +666,9 @@ app.get('/api/analytics/trend', async (req, res) => {
 // ---------------------------------------------------------------------------
 app.get('/operatory', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'operatory.html'));
+});
+app.get('/my-room', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'my-room.html'));
 });
 // Old per-room bookmarks (/op/1 .. /op/6) still work, just land on the
 // shared board that shows all six at once.

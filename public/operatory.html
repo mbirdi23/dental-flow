@@ -61,10 +61,11 @@ function render(visits) {
           <div class="op-name">${op}</div>
           <span class="pill ${isWaiting ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[visit.status] || visit.status)}</span>
         </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:10px 0 16px">
+        <div style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
           <div style="font-size:22px;font-weight:700">Patient ${escapeHtml(visit.patientId)}</div>
           ${editButtonHtml(visit.id)}
         </div>
+        ${visit.treatmentFlag ? `<div style="margin-bottom:12px">${treatmentBadgeHtml(true)}</div>` : '<div style="margin-bottom:16px"></div>'}
         <div style="display:flex;gap:28px;margin-bottom:18px">
           <div>
             <div style="color:var(--ink-soft);font-size:12px;margin-bottom:4px">${isWaiting ? 'Current Wait' : 'With Staff'}</div>
@@ -76,7 +77,10 @@ function render(visits) {
           </div>
         </div>
         ${renderActionButton(visit)}
-        <div style="text-align:center;margin-top:10px">${cancelButtonHtml(visit.id, visit.patientId)}</div>
+        <div style="text-align:center;margin-top:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
+          ${flagButtonHtml(visit.id, visit.treatmentFlag)}
+          ${cancelButtonHtml(visit.id, visit.patientId)}
+        </div>
       </div>
     `;
   }).join('');
@@ -104,10 +108,12 @@ async function act(visitId, action) {
   }
 }
 
-initTopbar();
-loadThresholds();
-connectRealtime(refresh);
-setInterval(refresh, 1000);
+if (!redirectOpStationAwayFromBoard()) {
+  initTopbar();
+  loadThresholds();
+  connectRealtime(refresh);
+  setInterval(refresh, 1000);
+}
 </script>
 </body>
 </html>

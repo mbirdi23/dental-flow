@@ -83,6 +83,7 @@ function renderWaitingAssistant(visits, occupiedOps) {
         <div style="display:flex;align-items:center;gap:6px">
           <strong>Patient ${escapeHtml(v.patientId)}</strong>
           ${editButtonHtml(v.id)}
+          ${treatmentBadgeHtml(v.treatmentFlag)}
         </div>
         <span class="timer timer-sm timer-${waitLevel(v.currentWaitSeconds)}">${fmtDuration(v.currentWaitSeconds)}</span>
       </div>
@@ -106,6 +107,7 @@ function renderWaitingCheckout(visits) {
         <div style="display:flex;align-items:center;gap:6px">
           <strong>Patient ${escapeHtml(v.patientId)}</strong>
           ${editButtonHtml(v.id)}
+          ${treatmentBadgeHtml(v.treatmentFlag)}
         </div>
         <div style="color:var(--ink-soft);font-size:13px">${escapeHtml(v.operatory || '')}</div>
       </div>
@@ -124,6 +126,7 @@ function renderWithCheckout(visits) {
         <div style="display:flex;align-items:center;gap:6px">
           <strong>Patient ${escapeHtml(v.patientId)}</strong>
           ${editButtonHtml(v.id)}
+          ${treatmentBadgeHtml(v.treatmentFlag)}
         </div>
         <div style="color:var(--ink-soft);font-size:13px">${escapeHtml(v.operatory || '')}</div>
       </div>

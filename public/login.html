@@ -38,7 +38,7 @@ async function init() {
 
   const routeFor = (s) => {
     if (s === 'Upfront') return '/';
-    if (/^OP\d+$/.test(s)) return '/operatory';
+    if (/^OP\d+$/.test(s)) return '/my-room';
     if (s === 'TC Room') return '/tc-queue';
     if (s === 'Lab') return '/dashboard';
     if (s === 'Back Office') return '/analytics';

@@ -1,23 +1,26 @@
 /* Dental Flow — shared styles
-   Palette: cool clinical blue-gray, teal accent, instrument-panel timers.
-   #F4F7F8 bg / #14262B ink / #0E7C86 teal / #2E8B57 green / #D69E00 amber / #C64545 red
+   Palette: warm, calm, and welcoming — matched to a "gentle, modern family
+   dentistry" brand feel rather than a cold clinical one. Wait-time
+   red/amber/green stay as standard traffic-light colors on purpose (that's
+   universally understood urgency signaling, not brand styling).
+   #FBF8F3 bg / #33302B ink / #B5654A clay accent / #4C8B5D green / #C08A2E amber / #C0503B red
 */
 
 :root {
-  --bg: #eef3f4;
+  --bg: #faf6f0;
   --panel: #ffffff;
-  --ink: #14262b;
-  --ink-soft: #52696e;
-  --line: #d7e1e3;
-  --teal: #0e7c86;
-  --teal-dark: #0a5b62;
-  --green: #1f8a55;
-  --green-bg: #e5f5ec;
-  --amber: #b9790a;
-  --amber-bg: #fbf0dc;
-  --red: #c23c3c;
-  --red-bg: #fbe6e6;
-  --radius: 10px;
+  --ink: #33302b;
+  --ink-soft: #857c6e;
+  --line: #ece3d4;
+  --teal: #b5654a;
+  --teal-dark: #93503a;
+  --green: #4c8b5d;
+  --green-bg: #eef5ec;
+  --amber: #c08a2e;
+  --amber-bg: #faf1e0;
+  --red: #c0503b;
+  --red-bg: #fbebe6;
+  --radius: 12px;
   --mono: 'DejaVu Sans Mono', 'Consolas', 'SFMono-Regular', Menlo, monospace;
   --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
 }
@@ -41,7 +44,7 @@ a { color: var(--teal-dark); }
   justify-content: space-between;
   padding: 14px 28px;
   background: var(--ink);
-  color: #eef3f4;
+  color: #f3ede1;
 }
 
 .topbar .brand {
@@ -56,13 +59,13 @@ a { color: var(--teal-dark); }
 .topbar .brand .dot {
   width: 9px; height: 9px; border-radius: 50%;
   background: var(--teal);
-  box-shadow: 0 0 0 3px rgba(14,124,134,0.35);
+  box-shadow: 0 0 0 3px rgba(181,101,74,0.35);
 }
 
 .topbar nav { display: flex; gap: 4px; flex-wrap: wrap; }
 
 .topbar nav a {
-  color: #cfe0e2;
+  color: #ddd3c0;
   text-decoration: none;
   font-size: 14px;
   padding: 7px 12px;
@@ -110,12 +113,12 @@ input[type="text"] {
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fbfdfd;
+  background: #fdfbf6;
   color: var(--ink);
 }
 
 input[type="text"]:focus, .btn:focus-visible {
-  outline: 3px solid rgba(14,124,134,0.4);
+  outline: 3px solid rgba(181,101,74,0.4);
   outline-offset: 1px;
 }
 
@@ -125,12 +128,12 @@ select {
   padding: 12px 14px;
   border: 1px solid var(--line);
   border-radius: 8px;
-  background: #fbfdfd;
+  background: #fdfbf6;
   color: var(--ink);
   margin-bottom: 16px;
 }
 
-select:focus { outline: 3px solid rgba(14,124,134,0.4); outline-offset: 1px; }
+select:focus { outline: 3px solid rgba(181,101,74,0.4); outline-offset: 1px; }
 
 /* --- edit button + modal --- */
 
@@ -158,10 +161,34 @@ select:focus { outline: 3px solid rgba(14,124,134,0.4); outline-offset: 1px; }
 }
 .cancel-link:hover { color: #a12e2e; }
 
+.flag-link {
+  background: #f5f3ff;
+  border: 1px solid #ddd6fe;
+  cursor: pointer;
+  color: #6d28d9;
+  font-size: 12px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 999px;
+}
+.flag-link:hover { background: #ede9fe; }
+.flag-link-active { background: #ede9fe; border-color: #c4b5fd; }
+
+.checkbox-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+  color: var(--ink);
+  margin-bottom: 16px;
+  cursor: pointer;
+}
+.checkbox-row input { width: 16px; height: 16px; flex-shrink: 0; }
+
 .modal-overlay {
   position: fixed;
   inset: 0;
-  background: rgba(20,38,43,0.45);
+  background: rgba(51,48,43,0.45);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -200,8 +227,8 @@ select:focus { outline: 3px solid rgba(14,124,134,0.4); outline-offset: 1px; }
 
 .btn-primary { background: var(--teal); color: #fff; }
 .btn-primary:hover { background: var(--teal-dark); }
-.btn-secondary { background: #eef3f4; color: var(--ink); border: 1px solid var(--line); }
-.btn-secondary:hover { background: #e2eced; }
+.btn-secondary { background: #f3ede1; color: var(--ink); border: 1px solid var(--line); }
+.btn-secondary:hover { background: #e9dfcd; }
 .btn:disabled { opacity: 0.45; cursor: not-allowed; }
 
 .btn-huge {
@@ -259,7 +286,8 @@ select:focus { outline: 3px solid rgba(14,124,134,0.4); outline-offset: 1px; }
 .pill-green { background: var(--green-bg); color: var(--green); }
 .pill-amber { background: var(--amber-bg); color: var(--amber); }
 .pill-red { background: var(--red-bg); color: var(--red); }
-.pill-neutral { background: #eef3f4; color: var(--ink-soft); }
+.pill-neutral { background: #f3ede1; color: var(--ink-soft); }
+.pill-flag { background: #ede9fe; color: #6d28d9; }
 
 /* --- instrument-panel timer: the signature element.
    Tabular monospace digits, like a stopwatch readout. --- */
@@ -351,12 +379,12 @@ tr.row-amber td { background: var(--amber-bg); }
   border-radius: 999px;
   padding: 4px 6px 4px 12px;
   font-size: 12px;
-  color: #cfe0e2;
+  color: #ddd3c0;
 }
 .station-pill strong { color: #fff; }
 .station-pill button {
   background: rgba(255,255,255,0.1);
-  color: #cfe0e2;
+  color: #ddd3c0;
   border: none;
   border-radius: 999px;
   padding: 5px 10px;
@@ -398,4 +426,4 @@ tr.row-amber td { background: var(--amber-bg); }
   color: var(--ink);
   cursor: pointer;
 }
-.login-btn:hover { border-color: var(--teal); background: #f0f9f9; color: var(--teal-dark); }
+.login-btn:hover { border-color: var(--teal); background: #f8ede7; color: var(--teal-dark); }

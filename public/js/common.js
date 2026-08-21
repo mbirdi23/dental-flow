@@ -66,6 +66,7 @@ const ACTION_LABEL = {
   complete: 'Completed Visit',
   manual_edit: 'Manual Edit',
   cancel_visit: 'Cancelled / No-Show',
+  toggle_flag: 'Treatment Flag Changed',
 };
 
 function escapeHtml(s) {
@@ -143,6 +144,33 @@ function logout() {
   window.location.href = '/login';
 }
 
+function isOpStation(station) {
+  return /^OP\d+$/.test(station || '');
+}
+
+// OP-station logins only ever see their own room (never the six-room
+// board), so every page's "Operatories" nav link becomes "My Room" and
+// points at /my-room instead. Runs automatically via initTopbar().
+function applyStationNav(station) {
+  if (!isOpStation(station)) return;
+  document.querySelectorAll('.topbar nav a[href="/operatory"]').forEach((a) => {
+    a.href = '/my-room';
+    a.textContent = 'My Room';
+  });
+}
+
+// Call at the very top of the Operatories board page (before anything
+// else runs): an OP-station login has no way to see other rooms, even by
+// typing the URL directly, so it's redirected to its own room instead.
+// Returns true if a redirect happened, so the caller can stop early.
+function redirectOpStationAwayFromBoard() {
+  if (isOpStation(getStation())) {
+    window.location.replace('/my-room');
+    return true;
+  }
+  return false;
+}
+
 // Call at the top of every protected page. Redirects to /login if this
 // device hasn't picked a station yet.
 function requireStation() {
@@ -164,6 +192,7 @@ function initTopbar() {
   if (nameEl) nameEl.textContent = station;
   const logoutBtn = document.getElementById('stationLogout');
   if (logoutBtn) logoutBtn.addEventListener('click', logout);
+  applyStationNav(station);
 
   async function pollWaitingRoom() {
     try {
@@ -203,6 +232,32 @@ function editButtonHtml(visitId) {
 
 function cancelButtonHtml(visitId, patientLabel) {
   return `<button class="cancel-link" title="Cancel visit / mark no-show" onclick="cancelVisit(${visitId}, '${escapeHtml(patientLabel || '')}')">Cancel / No-show</button>`;
+}
+
+// --- Treatment flag: staff mark a visit when it turns into same-day
+// treatment (not just a routine checkup), so everyone expects a longer
+// chair time. Purely visual/informational — it never changes the
+// green/yellow/red wait thresholds, on purpose (per practice preference:
+// a flagged patient waiting a long time is still worth knowing about). ---
+
+function treatmentBadgeHtml(flag) {
+  if (!flag) return '';
+  return `<span class="pill pill-flag" title="Flagged for treatment — expect a longer visit">⏳ Extended Visit</span>`;
+}
+
+function flagButtonHtml(visitId, flag) {
+  const label = flag ? 'Remove Treatment Flag' : 'Flag for Treatment';
+  return `<button class="flag-link ${flag ? 'flag-link-active' : ''}" title="${flag ? 'Remove the extended-visit flag' : 'Mark this visit as turning into same-day treatment'}" onclick="toggleTreatmentFlag(${visitId}, ${flag ? 'true' : 'false'})">${flag ? '⏳ Flagged — tap to clear' : '⏳ Flag for Treatment'}</button>`;
+}
+
+async function toggleTreatmentFlag(visitId, currentFlag) {
+  try {
+    await postJSON(`/api/visits/${visitId}/override`, { treatmentFlag: !currentFlag, role: getStation() });
+    toast(currentFlag ? 'Flag removed' : 'Flagged for treatment');
+    if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();
+  } catch (e) {
+    toast(e.message);
+  }
 }
 
 async function cancelVisit(visitId, patientLabel) {
@@ -248,6 +303,10 @@ function openEditModal(visit) {
         <option value="">— None —</option>
         ${OPERATORIES.map((op) => `<option value="${op}" ${op === visit.operatory ? 'selected' : ''}>${op}</option>`).join('')}
       </select>
+      <label class="checkbox-row">
+        <input type="checkbox" id="editTreatmentFlag" ${visit.treatmentFlag ? 'checked' : ''} />
+        <span>⏳ Turned into same-day treatment (expect a longer visit)</span>
+      </label>
       <div id="editError" class="edit-error"></div>
       <p class="edit-hint">Changing status closes any timer currently running and starts a new one if the corrected status is a waiting state. Logged to the Activity Log.</p>
       <div class="modal-actions">
@@ -272,8 +331,9 @@ async function saveEditModal(visitId) {
   const patientId = document.getElementById('editPatientId').value;
   const status = document.getElementById('editStatus').value;
   const operatory = document.getElementById('editOperatory').value;
+  const treatmentFlag = document.getElementById('editTreatmentFlag').checked;
   try {
-    await postJSON(`/api/visits/${visitId}/override`, { patientId, status, operatory: operatory || null, role: getStation() });
+    await postJSON(`/api/visits/${visitId}/override`, { patientId, status, operatory: operatory || null, treatmentFlag, role: getStation() });
     closeEditModal();
     toast('Visit updated');
     if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();

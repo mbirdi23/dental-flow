@@ -66,6 +66,7 @@ function render(queue) {
           <div style="font-size:18px;font-weight:700">Patient ${escapeHtml(v.patientId)}</div>
           ${editButtonHtml(v.id)}
         </div>
+        ${v.treatmentFlag ? `<div style="margin-bottom:12px">${treatmentBadgeHtml(true)}</div>` : ''}
         <div class="timer timer-lg timer-${level}" style="margin-bottom:16px">${isWaiting ? fmtDuration(v.currentWaitSeconds) : '—'}</div>
         ${v.tcNextAction ? `<button class="btn btn-primary" style="width:100%;padding:14px" onclick="act(${v.id}, '${v.tcNextAction.action}')">${v.tcNextAction.label}</button>` : ''}
         <div style="text-align:center;margin-top:10px">${cancelButtonHtml(v.id, v.patientId)}</div>

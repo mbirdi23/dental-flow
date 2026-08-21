@@ -310,6 +310,18 @@ it runs in under a second and needs no database.
   or cancelled, that ID is free to reuse (e.g. the same patient's next
   appointment) — active-only uniqueness is enforced server-side on both
   check-in and edit.
+- **The treatment flag is purely visual.** Marking a visit "Flagged for
+  Treatment" (e.g. a routine checkup turns into same-day work) shows a
+  badge everywhere that patient appears, but deliberately does **not**
+  change the green/yellow/red wait thresholds — a flagged patient waiting
+  a long time is still worth surfacing as a long wait. Staff can toggle it
+  from My Room, the Operatories board, the Dashboard, or the edit panel on
+  any screen.
+
+**If you already deployed before this update:** the `treatment_flag`
+column won't exist on your database yet. Just re-run `npm run db:init` —
+it uses `ADD COLUMN IF NOT EXISTS`, so it adds the new column without
+touching any existing data.
 
 ---
 

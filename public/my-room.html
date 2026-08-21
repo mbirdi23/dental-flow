@@ -1,0 +1,129 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>My Room — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span>Dental Flow</div>
+  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong> <button id="stationLogout">Switch</button></div>
+  <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
+  <nav>
+    <a href="/">Front Desk</a>
+    <a href="/operatory" class="active">My Room</a>
+    <a href="/tc-queue">TC Room</a>
+    <a href="/dashboard">Live Dashboard</a>
+    <a href="/doctor-queue">Doctor Queue</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/activity-log">Activity Log</a>
+  </nav>
+</div>
+
+<main>
+  <h1 id="roomTitle">My Room</h1>
+  <p class="subtitle">This screen only shows your own room, start to finish — you can carry a patient all the way through checkout and complete the visit right here.</p>
+
+  <div id="content"></div>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+const ROOM = getStation(); // e.g. "OP3" — this page only ever shows this room
+document.getElementById('roomTitle').textContent = ROOM || 'My Room';
+document.title = (ROOM || 'My Room') + ' — Dental Flow';
+
+async function refresh() {
+  const res = await fetch('/api/visits/active');
+  const visits = await res.json();
+  const visit = visits.find((v) => v.operatory === ROOM);
+  render(visit);
+  updateWaitingBadge(visits);
+}
+window.__refreshCurrentPage = refresh;
+
+function render(visit) {
+  const el = document.getElementById('content');
+  if (!visit) {
+    el.innerHTML = `<div class="panel empty-state" style="padding:60px 20px">No patient currently assigned to ${escapeHtml(ROOM)}.</div>`;
+    return;
+  }
+
+  const isWaiting = !!visit.waitingFor;
+  const level = isWaiting ? waitLevel(visit.currentWaitSeconds) : 'green';
+
+  el.innerHTML = `
+    <div class="panel" style="margin-bottom:20px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
+        <div>
+          <div style="color:var(--ink-soft);font-size:13px;margin-bottom:4px">Patient ID</div>
+          <div style="display:flex;align-items:center;gap:10px">
+            <div style="font-size:28px;font-weight:700">${escapeHtml(visit.patientId)}</div>
+            ${editButtonHtml(visit.id)}
+          </div>
+        </div>
+        <span class="pill ${isWaiting ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[visit.status] || visit.status)}</span>
+      </div>
+      ${visit.treatmentFlag ? `<div style="margin-top:10px">${treatmentBadgeHtml(true)}</div>` : ''}
+
+      <div style="display:flex;gap:40px;margin-top:22px;flex-wrap:wrap">
+        <div>
+          <div style="color:var(--ink-soft);font-size:13px;margin-bottom:6px">
+            ${isWaiting ? 'Current Wait' : 'Currently With Staff'}
+          </div>
+          <div class="timer timer-lg timer-${isWaiting ? level : 'green'}">
+            ${isWaiting ? fmtDuration(visit.currentWaitSeconds) : '—'}
+          </div>
+        </div>
+        <div>
+          <div style="color:var(--ink-soft);font-size:13px;margin-bottom:6px">Total Idle Time This Visit</div>
+          <div class="timer timer-lg" style="color:var(--ink)">${fmtDuration(visit.totalIdleSeconds)}</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel">
+      ${renderActionButton(visit)}
+      <div style="text-align:center;margin-top:14px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
+        ${flagButtonHtml(visit.id, visit.treatmentFlag)}
+        ${cancelButtonHtml(visit.id, visit.patientId)}
+      </div>
+    </div>
+  `;
+}
+
+function renderActionButton(visit) {
+  const next = visit.fullNextAction;
+  if (!next) {
+    return `<div class="empty-state">Waiting for front desk to hand off this patient.</div>`;
+  }
+  return `<button class="btn btn-primary btn-huge" onclick="act('${next.action}')">${next.label}</button>`;
+}
+
+async function act(action) {
+  const res = await fetch('/api/visits/active');
+  const visits = await res.json();
+  const visit = visits.find((v) => v.operatory === ROOM);
+  if (!visit) return;
+  try {
+    await postJSON(`/api/visits/${visit.id}/transition`, { action, role: getStation() });
+    refresh();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+if (!isOpStation(ROOM)) {
+  window.location.replace('/operatory');
+} else {
+  initTopbar();
+  loadThresholds();
+  connectRealtime(refresh);
+  setInterval(refresh, 1000);
+}
+</script>
+</body>
+</html>

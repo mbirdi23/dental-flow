@@ -12,6 +12,12 @@ CREATE TABLE IF NOT EXISTS visits (
   completed_at   TIMESTAMPTZ
 );
 
+-- Added after initial launch: staff flag a visit when it's turned into
+-- same-day treatment (not just a routine checkup), so everyone knows to
+-- expect a longer chair time. ADD COLUMN IF NOT EXISTS makes this safe to
+-- apply to an already-running database — just re-run `npm run db:init`.
+ALTER TABLE visits ADD COLUMN IF NOT EXISTS treatment_flag BOOLEAN NOT NULL DEFAULT false;
+
 CREATE INDEX IF NOT EXISTS idx_visits_status ON visits (status);
 CREATE INDEX IF NOT EXISTS idx_visits_started_at ON visits (started_at);
 

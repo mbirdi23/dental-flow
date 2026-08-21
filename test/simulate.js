@@ -45,7 +45,7 @@ function checkIn(db, patientId, role) {
     throw new Error(`Patient ${patientId} already has an active visit`);
   }
   const id = db.nextVisitId++;
-  const visit = { id, patientId, operatory: null, status: 'arrived', startedAt: clockNow(), completedAt: null };
+  const visit = { id, patientId, operatory: null, status: 'arrived', startedAt: clockNow(), completedAt: null, treatmentFlag: false };
   db.visits.set(id, visit);
   transition(db, id, 'ready_for_assistant', { role });
   return visit;
@@ -137,12 +137,18 @@ function override(db, visitId, updates, role) {
     visit.completedAt = updates.status === 'completed' ? clockNow() : null;
   }
 
+  if (typeof updates.treatmentFlag === 'boolean' && updates.treatmentFlag !== visit.treatmentFlag) {
+    changes.push(updates.treatmentFlag ? 'Flagged for treatment' : 'Treatment flag removed');
+    visit.treatmentFlag = updates.treatmentFlag;
+  }
+
   if (changes.length) {
     const isCancel = updates.status === 'cancelled';
+    const isFlagOnly = !isCancel && changes.length === 1 && typeof updates.treatmentFlag === 'boolean';
     db.activityLog.push({
       id: db.nextLogId++, visitId, patientId: visit.patientId, station: role || 'Unknown',
-      action: isCancel ? 'cancel_visit' : 'manual_edit',
-      label: isCancel ? ACTION_LABEL.cancel_visit : ACTION_LABEL.manual_edit,
+      action: isCancel ? 'cancel_visit' : isFlagOnly ? 'toggle_flag' : 'manual_edit',
+      label: isCancel ? ACTION_LABEL.cancel_visit : isFlagOnly ? (updates.treatmentFlag ? 'Flagged for Treatment' : 'Treatment Flag Removed') : ACTION_LABEL.manual_edit,
       details: changes.join('; '), createdAt: clockNow(),
     });
   }
@@ -448,6 +454,94 @@ console.log('\n9. Editing a Patient ID must not collide with another active pati
   test('once A completes, its old ID frees up for reuse via edit', () => {
     override(db, a.id, { status: 'cancelled' }, 'Upfront');
     assert.doesNotThrow(() => override(db, b.id, { patientId: '9001' }, 'Upfront'));
+  });
+}
+
+console.log('\n10. My Room (a single OP station) can carry a visit all the way to completion\n');
+{
+  const { FULL_NEXT_ACTION } = require('../lib/flow');
+  const db = freshDb();
+  const v = checkIn(db, '10001', 'Upfront');
+  transition(db, v.id, 'assign_operatory', { operatory: 'OP1', role: 'Upfront' });
+
+  test('FULL_NEXT_ACTION has an entry for every status from with_assistant through with_checkout', () => {
+    const expectedStatuses = ['with_assistant', 'waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor', 'waiting_tc', 'with_tc', 'waiting_checkout', 'with_checkout'];
+    for (const s of expectedStatuses) {
+      assert.ok(FULL_NEXT_ACTION[s], `missing FULL_NEXT_ACTION entry for ${s}`);
+    }
+  });
+
+  test('driving the visit using only FULL_NEXT_ACTION actions reaches "completed"', () => {
+    // Simulates OP1 staff clicking through every stage themselves, never
+    // touching the TC Room or Front Desk screens.
+    let guard = 0;
+    while (v.status !== 'completed' && guard < 20) {
+      const next = FULL_NEXT_ACTION[v.status];
+      if (!next) break;
+      transition(db, v.id, next.action, { role: 'OP1' });
+      guard++;
+    }
+    assert.strictEqual(v.status, 'completed');
+  });
+
+  test('the room is free again once complete', () => {
+    assert.strictEqual(isOperatoryOccupied(db, 999, 'OP1'), false);
+  });
+}
+
+console.log('\n11. Treatment flag: visual only, never touches timers or thresholds\n');
+{
+  const db = freshDb();
+  const v = checkIn(db, '11001', 'Upfront');
+  transition(db, v.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' });
+  transition(db, v.id, 'waiting_hygiene', { role: 'OP2' });
+  advance(45);
+
+  test('a new visit starts with no treatment flag', () => {
+    assert.strictEqual(v.treatmentFlag, false);
+  });
+
+  test('flagging a visit does not touch the running timer', () => {
+    const openBefore = findOpenGap(db, v.id);
+    const startedAtBefore = openBefore.startedAt;
+    override(db, v.id, { treatmentFlag: true }, 'OP2');
+    assert.strictEqual(v.treatmentFlag, true);
+    const openAfter = findOpenGap(db, v.id);
+    assert.strictEqual(openAfter.startedAt, startedAtBefore);
+    assert.strictEqual(openAfter.id, openBefore.id); // same gap, not closed/reopened
+  });
+
+  test('a flag-only change is logged distinctly as toggle_flag, not manual_edit', () => {
+    const entry = db.activityLog[db.activityLog.length - 1];
+    assert.strictEqual(entry.action, 'toggle_flag');
+    assert.strictEqual(entry.label, 'Flagged for Treatment');
+  });
+
+  test('the flag can be toggled back off', () => {
+    override(db, v.id, { treatmentFlag: false }, 'OP2');
+    assert.strictEqual(v.treatmentFlag, false);
+    const entry = db.activityLog[db.activityLog.length - 1];
+    assert.strictEqual(entry.label, 'Treatment Flag Removed');
+  });
+
+  test('flagging alongside a status change is logged as a combined manual edit, not a flag toggle', () => {
+    override(db, v.id, { status: 'with_hygiene', treatmentFlag: true }, 'OP2');
+    const entry = db.activityLog[db.activityLog.length - 1];
+    assert.strictEqual(entry.action, 'manual_edit');
+    assert.ok(entry.details.includes('Flagged for treatment'));
+    assert.ok(entry.details.includes('Status'));
+  });
+
+  test('the flag survives through to completion and is a plain boolean throughout', () => {
+    transition(db, v.id, 'waiting_doctor', { role: 'OP2' });
+    transition(db, v.id, 'with_doctor', { role: 'OP2' });
+    transition(db, v.id, 'waiting_tc', { role: 'OP2' });
+    transition(db, v.id, 'with_tc', { role: 'TC Room' });
+    transition(db, v.id, 'waiting_checkout', { role: 'TC Room' });
+    transition(db, v.id, 'with_checkout', { role: 'Upfront' });
+    transition(db, v.id, 'complete', { role: 'Upfront' });
+    assert.strictEqual(v.treatmentFlag, true);
+    assert.strictEqual(v.status, 'completed');
   });
 }
 
