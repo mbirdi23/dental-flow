@@ -4,10 +4,10 @@ let THRESHOLDS = { yellowSeconds: 300, redSeconds: 600 };
 
 async function loadThresholds() {
   try {
-    const res = await fetch('/api/config');
-    THRESHOLDS = await res.json();
+    const cfg = await getJSON('/api/config');
+    THRESHOLDS = { yellowSeconds: cfg.yellowSeconds, redSeconds: cfg.redSeconds };
   } catch (e) {
-    // fall back to defaults already set above
+    // keep the defaults
   }
 }
 
@@ -29,13 +29,18 @@ const WAITING_FOR_LABEL = {
   hygienist: 'Hygienist',
   doctor: 'Doctor',
   treatment_coordinator: 'Treatment Coordinator',
-  checkout: 'Checkout',
+  checkout: 'Checkout (retired)',
 };
 
 const OPERATORIES = ['OP1', 'OP2', 'OP3', 'OP4', 'OP5', 'OP6'];
 
+// waiting_checkout / with_checkout stay here (display-only) purely so old
+// completed visits still render correctly in the Activity Log / Analytics
+// — they're no longer reachable going forward. See STATUS_OPTIONS below
+// for what the edit dropdown actually offers.
 const STATUS_LABEL = {
   arrived: 'Checked In',
+  doing_paperwork: 'Doing Paperwork',
   waiting_assistant: 'Waiting Room',
   with_assistant: 'Pulled Back',
   waiting_hygiene: 'Waiting for Hygienist',
@@ -44,16 +49,24 @@ const STATUS_LABEL = {
   with_doctor: 'With Doctor',
   waiting_tc: 'Waiting for Treatment Coordinator',
   with_tc: 'With Treatment Coordinator',
-  waiting_checkout: 'Waiting for Checkout',
-  with_checkout: 'With Checkout',
+  waiting_checkout: 'Waiting for Checkout (retired)',
+  with_checkout: 'With Checkout (retired)',
   completed: 'Completed',
   cancelled: 'Cancelled / No-Show',
 };
 
-const ALL_STATUSES = Object.keys(STATUS_LABEL).filter((s) => s !== 'completed' && s !== 'cancelled').concat(['completed', 'cancelled']);
+// The manual-edit status dropdown only ever offers these — the retired
+// checkout statuses are deliberately excluded so staff can't manually set
+// a visit to a stage that no longer exists in the live flow.
+const ALL_STATUSES = [
+  'arrived', 'doing_paperwork', 'waiting_assistant', 'with_assistant',
+  'waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor',
+  'waiting_tc', 'with_tc', 'completed', 'cancelled',
+];
 
 const ACTION_LABEL = {
-  ready_for_assistant: 'Checked In',
+  start_paperwork: 'Checked In',
+  ready_for_assistant: 'Paperwork Complete',
   assign_operatory: 'Assigned Operatory',
   waiting_hygiene: 'Waiting for Hygienist',
   with_hygiene: 'With Hygienist',
@@ -61,8 +74,8 @@ const ACTION_LABEL = {
   with_doctor: 'With Doctor',
   waiting_tc: 'Waiting for Treatment Coordinator',
   with_tc: 'With Treatment Coordinator',
-  waiting_checkout: 'Ready for Checkout',
-  with_checkout: 'With Checkout',
+  waiting_checkout: 'Ready for Checkout (retired)',
+  with_checkout: 'With Checkout (retired)',
   complete: 'Completed Visit',
   manual_edit: 'Manual Edit',
   cancel_visit: 'Cancelled / No-Show',
@@ -75,27 +88,23 @@ function escapeHtml(s) {
 
 // Connects to the SSE stream and calls onChange() whenever anything in the
 // system changes. Falls back to a 5s poll if the stream drops.
+// Listens for "something changed" pushes from the server. Each push clears
+// the local cache so the next render fetches fresh data; between pushes,
+// timers tick locally (see getJSON) instead of asking the server every
+// second. If the live connection drops, falls back to checking every 30s.
 function connectRealtime(onChange) {
-  let es;
-  let pollTimer;
-
-  function startPolling() {
-    if (pollTimer) return;
-    pollTimer = setInterval(onChange, 5000);
-  }
-  function stopPolling() {
-    clearInterval(pollTimer);
-    pollTimer = null;
-  }
-
+  let pollTimer = null;
+  const changed = () => { invalidateCache(); onChange(); };
+  function startPolling() { if (!pollTimer) pollTimer = setInterval(changed, 30000); }
+  function stopPolling() { clearInterval(pollTimer); pollTimer = null; }
   function connect() {
-    es = new EventSource('/api/stream');
-    es.addEventListener('visits-changed', () => onChange());
+    const es = new EventSource('/api/stream');
+    es.addEventListener('visits-changed', changed);
     es.onopen = stopPolling;
     es.onerror = () => {
       startPolling();
       es.close();
-      setTimeout(connect, 3000);
+      setTimeout(connect, 5000);
     };
   }
   connect();
@@ -120,10 +129,13 @@ async function postJSON(url, body) {
   const res = await fetch(url, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
+    credentials: 'same-origin',
     body: JSON.stringify(body || {}),
   });
+  if (await handleAuthFailure(res)) throw new Error('Please sign in again');
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.error || 'Request failed');
+  invalidateCache();
   return data;
 }
 
@@ -139,9 +151,10 @@ function setStation(name) {
   localStorage.setItem(STATION_KEY, name);
 }
 
+// "Switch" — changes which station this screen is, without signing out.
 function logout() {
   localStorage.removeItem(STATION_KEY);
-  window.location.href = '/login';
+  window.location.href = '/station';
 }
 
 function isOpStation(station) {
@@ -176,7 +189,7 @@ function redirectOpStationAwayFromBoard() {
 function requireStation() {
   const s = getStation();
   if (!s) {
-    window.location.href = '/login';
+    window.location.href = '/station';
     return null;
   }
   return s;
@@ -185,26 +198,61 @@ function requireStation() {
 // Fills in the station name + Switch button, and starts a lightweight poll
 // that keeps the red "Waiting Room" badge accurate on every page, even ones
 // that don't otherwise fetch the full active-visits list.
-function initTopbar() {
+// Fills in who's signed in, the station, and the Switch / Hide Names /
+// Log Out buttons; adds the Admin link for admins; starts activity tracking
+// (automatic logoff) and keeps the red Waiting Room badge current.
+async function initTopbar() {
   const station = requireStation();
   if (!station) return;
-  const nameEl = document.getElementById('stationName');
-  if (nameEl) nameEl.textContent = station;
-  const logoutBtn = document.getElementById('stationLogout');
-  if (logoutBtn) logoutBtn.addEventListener('click', logout);
-  applyStationNav(station);
 
-  async function pollWaitingRoom() {
-    try {
-      const res = await fetch('/api/visits/active');
-      const visits = await res.json();
-      updateWaitingBadge(visits);
-    } catch (e) {
-      // ignore transient errors
-    }
+  document.querySelectorAll('.station-pill').forEach((el) => {
+    el.innerHTML = `
+      <strong id="userDisplayName"></strong>
+      <span style="opacity:0.55">·</span>
+      <span id="stationName"></span>
+      <button id="stationLogout" type="button" title="Use this screen as a different station">Switch</button>
+      <button id="hideNamesBtn" class="names-only" type="button" title="Show only first initials on this screen"></button>
+      <button id="fullLogout" type="button">Log Out</button>
+    `;
+  });
+  const stationEl = document.getElementById('stationName');
+  if (stationEl) stationEl.textContent = station;
+  const switchBtn = document.getElementById('stationLogout');
+  if (switchBtn) switchBtn.addEventListener('click', logout);
+  const logoutBtn = document.getElementById('fullLogout');
+  if (logoutBtn) logoutBtn.addEventListener('click', fullLogout);
+  const hideBtn = document.getElementById('hideNamesBtn');
+  if (hideBtn) {
+    const label = () => { hideBtn.textContent = namesHidden() ? 'Show Names' : 'Hide Names'; };
+    label();
+    hideBtn.addEventListener('click', () => {
+      try { localStorage.setItem(HIDE_NAMES_KEY, namesHidden() ? '0' : '1'); } catch (e) {}
+      label();
+      if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();
+    });
   }
-  pollWaitingRoom();
-  setInterval(pollWaitingRoom, 5000);
+
+  applyStationNav(station);
+  setupActivityTracking();
+  setInterval(() => { getJSON('/api/visits/active').then(updateWaitingBadge).catch(() => {}); }, 5000);
+
+  try {
+    const me = await getJSON('/api/me');
+    const nameEl = document.getElementById('userDisplayName');
+    if (nameEl) nameEl.textContent = me.displayName;
+    if (me.isAdmin) {
+      document.querySelectorAll('.topbar nav').forEach((nav) => {
+        if (nav.querySelector('a[href="/admin"]')) return;
+        const a = document.createElement('a');
+        a.href = '/admin';
+        a.textContent = 'Admin';
+        if (window.location.pathname === '/admin') a.className = 'active';
+        nav.appendChild(a);
+      });
+    }
+  } catch (e) {
+    // not fatal
+  }
 }
 
 function updateWaitingBadge(visits) {
@@ -230,8 +278,11 @@ function editButtonHtml(visitId) {
   </button>`;
 }
 
-function cancelButtonHtml(visitId, patientLabel) {
-  return `<button class="cancel-link" title="Cancel visit / mark no-show" onclick="cancelVisit(${visitId}, '${escapeHtml(patientLabel || '')}')">Cancel / No-show</button>`;
+// Only the numeric visit id goes into the click handler. Putting patient
+// text there would let a crafted Patient ID run code (HTML-escaping isn't
+// enough inside an onclick attribute).
+function cancelButtonHtml(visitId) {
+  return `<button class="cancel-link" title="Cancel visit / mark no-show" onclick="cancelVisit(${Number(visitId)})">Cancel / No-show</button>`;
 }
 
 // --- Treatment flag: staff mark a visit when it turns into same-day
@@ -260,8 +311,13 @@ async function toggleTreatmentFlag(visitId, currentFlag) {
   }
 }
 
-async function cancelVisit(visitId, patientLabel) {
-  const label = patientLabel ? `Patient ${patientLabel}` : 'this visit';
+async function cancelVisit(visitId) {
+  let label = 'this visit';
+  try {
+    const visits = await getJSON('/api/visits/active');
+    const v = visits.find((x) => x.id === visitId);
+    if (v) label = v.firstName || (v.patientId ? `Patient ${v.patientId}` : `Visit ${v.id}`);
+  } catch (e) { /* fall back to the generic wording */ }
   if (!window.confirm(`Cancel ${label}? This stops their timer and removes them from all active screens.`)) return;
   try {
     await postJSON(`/api/visits/${visitId}/override`, { status: 'cancelled', role: getStation() });
@@ -274,8 +330,7 @@ async function cancelVisit(visitId, patientLabel) {
 
 async function editVisit(visitId) {
   try {
-    const res = await fetch('/api/visits/active');
-    const visits = await res.json();
+    const visits = await getJSON('/api/visits/active');
     const visit = visits.find((v) => v.id === visitId);
     if (!visit) { toast("Can't edit — visit is no longer active"); return; }
     openEditModal(visit);
@@ -292,6 +347,10 @@ function openEditModal(visit) {
   overlay.innerHTML = `
     <div class="modal-box">
       <h2>Edit Visit</h2>
+      <div class="names-only">
+        <label>First Name</label>
+        <input type="text" id="editFirstName" value="${escapeHtml(visit.firstName || '')}" maxlength="40" autocomplete="off" style="margin-bottom:14px" />
+      </div>
       <label>Patient ID</label>
       <input type="text" id="editPatientId" value="${escapeHtml(visit.patientId)}" maxlength="40" />
       <label>Status</label>
@@ -328,16 +387,251 @@ function closeEditModal() {
 }
 
 async function saveEditModal(visitId) {
+  const firstName = document.getElementById('editFirstName').value;
   const patientId = document.getElementById('editPatientId').value;
   const status = document.getElementById('editStatus').value;
   const operatory = document.getElementById('editOperatory').value;
   const treatmentFlag = document.getElementById('editTreatmentFlag').checked;
   try {
-    await postJSON(`/api/visits/${visitId}/override`, { patientId, status, operatory: operatory || null, treatmentFlag, role: getStation() });
+    await postJSON(`/api/visits/${visitId}/override`, { firstName, patientId, status, operatory: operatory || null, treatmentFlag, role: getStation() });
     closeEditModal();
     toast('Visit updated');
     if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();
   } catch (e) {
     document.getElementById('editError').textContent = e.message;
   }
+}
+
+
+// ---------------------------------------------------------------------------
+// Sign-in, automatic logoff, caching and patient-name display
+// ---------------------------------------------------------------------------
+
+function stationHome(s) {
+  if (s === 'Upfront') return '/';
+  if (/^OP\d+$/.test(s)) return '/my-room';
+  if (s === 'TC Room') return '/tc-queue';
+  if (s === 'Lab') return '/dashboard';
+  if (s === 'Back Office') return '/analytics';
+  return '/';
+}
+
+async function fullLogout() {
+  try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+  window.location.href = '/login';
+}
+
+let _authRedirecting = false;
+// Sends the browser to the sign-in page (or password page) when the server
+// says the session is gone. Returns true if it handled the response.
+async function handleAuthFailure(res) {
+  if (res.status !== 401 && res.status !== 403) return false;
+  const data = await res.clone().json().catch(() => ({}));
+  if (res.status === 401) {
+    if (!_authRedirecting) {
+      _authRedirecting = true;
+      window.location.href = `/login?reason=${encodeURIComponent(data.reason || 'signed-out')}`;
+    }
+    return true;
+  }
+  if (data.code === 'PASSWORD_CHANGE_REQUIRED') {
+    if (!_authRedirecting) {
+      _authRedirecting = true;
+      window.location.href = '/change-password';
+    }
+    return true;
+  }
+  return false;
+}
+
+// Short-lived cache so screens don't ask the server for the same list every
+// second. Between fetches, wait timers keep counting up locally. The cache
+// is cleared whenever the server pushes a change or this screen makes one.
+const CACHE_MAX_AGE_MS = 30000;
+const _cache = new Map();
+const _inflight = new Map();
+
+function invalidateCache() {
+  _cache.clear();
+}
+
+function ageVisitList(data, elapsedSec) {
+  if (!Array.isArray(data) || elapsedSec <= 0) return data;
+  return data.map((v) => (v && v.waitingFor && typeof v.currentWaitSeconds === 'number')
+    ? { ...v, currentWaitSeconds: v.currentWaitSeconds + elapsedSec, totalIdleSeconds: v.totalIdleSeconds + elapsedSec }
+    : v);
+}
+
+async function getJSON(url) {
+  const now = Date.now();
+  const cached = _cache.get(url);
+  if (cached && now - cached.at < CACHE_MAX_AGE_MS) {
+    return ageVisitList(cached.data, Math.floor((now - cached.at) / 1000));
+  }
+  if (_inflight.has(url)) return _inflight.get(url);
+  const pending = (async () => {
+    try {
+      const res = await fetch(url, { credentials: 'same-origin', cache: 'no-store' });
+      if (await handleAuthFailure(res)) throw new Error('Please sign in again');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || 'Request failed');
+      _cache.set(url, { at: Date.now(), data });
+      return data;
+    } finally {
+      _inflight.delete(url);
+    }
+  })();
+  _inflight.set(url, pending);
+  return pending;
+}
+
+// Automatic logoff: real use of the screen (click, key, touch, mouse)
+// tells the server someone is here, at most once a minute. A screen nobody
+// touches is signed out after the idle limit set on the server.
+let _lastHeartbeat = 0;
+function setupActivityTracking() {
+  const ping = () => {
+    const now = Date.now();
+    if (now - _lastHeartbeat < 60000) return;
+    _lastHeartbeat = now;
+    fetch('/api/heartbeat', { method: 'POST', credentials: 'same-origin' })
+      .then((res) => handleAuthFailure(res))
+      .catch(() => {});
+  };
+  ['click', 'keydown', 'touchstart', 'mousemove', 'scroll'].forEach((evt) => {
+    window.addEventListener(evt, ping, { passive: true });
+  });
+  ping();
+}
+
+const HIDE_NAMES_KEY = 'dental_flow_hide_names';
+function namesHidden() {
+  try { return localStorage.getItem(HIDE_NAMES_KEY) === '1'; } catch (e) { return false; }
+}
+
+// "Sarah #8472", "S. #8472" with names hidden, or "Patient 8472" if no
+// first name was entered.
+function patientLabel(v) {
+  if (!v.firstName) return v.patientId ? `Patient ${escapeHtml(v.patientId)}` : `Visit ${v.id}`;
+  const name = namesHidden() ? `${String(v.firstName).charAt(0)}.` : String(v.firstName);
+  return `${escapeHtml(name)}${v.patientId ? ` <span class="pid">#${escapeHtml(v.patientId)}</span>` : ''}`;
+}
+
+function showTestBanner() {
+  if (document.getElementById('testBanner')) return;
+  const el = document.createElement('div');
+  el.id = 'testBanner';
+  el.className = 'test-banner';
+  el.textContent = 'Test mode — this server is not yet set up for real patient information. Use made-up names only.';
+  document.body.insertBefore(el, document.body.firstChild);
+}
+
+
+// ---------------------------------------------------------------------------
+// Room view and room turnover (cleaning)
+// ---------------------------------------------------------------------------
+
+function cleaningFor(rooms, op) {
+  return (rooms || []).find((r) => r.operatory === op) || null;
+}
+
+function cleaningBannerHtml(op, room) {
+  if (!room || !OPERATORIES.includes(op)) return '';
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(room.cleaningSince).getTime()) / 60000));
+  return `<div class="cleaning-banner">
+    <span>🧽 Being broken down, ${mins < 1 ? 'just started' : mins + ' min'}</span>
+    <button class="btn btn-secondary" onclick="markRoomReady('${op}')">Room ready</button>
+  </div>`;
+}
+
+async function markRoomReady(op) {
+  if (!OPERATORIES.includes(op)) return;
+  try {
+    await postJSON(`/api/rooms/${encodeURIComponent(op)}/ready`, { role: getStation() });
+    toast(`${op} is ready`);
+    if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+function roomPatientHtml(visit, big) {
+  const isWaiting = !!visit.waitingFor;
+  const level = isWaiting ? waitLevel(visit.currentWaitSeconds) : 'green';
+  const next = visit.fullNextAction;
+  const size = big ? 'timer-lg' : 'timer-md';
+  return `
+    <div class="panel" style="margin-bottom:16px">
+      <div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:16px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div style="font-size:${big ? 28 : 20}px;font-weight:700">${patientLabel(visit)}</div>
+          ${editButtonHtml(visit.id)}
+        </div>
+        <span class="pill ${isWaiting ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[visit.status] || visit.status)}</span>
+      </div>
+      ${visit.treatmentFlag ? `<div style="margin-top:10px">${treatmentBadgeHtml(true)}</div>` : ''}
+      <div style="display:flex;gap:40px;margin:20px 0 ${big ? 0 : 16}px;flex-wrap:wrap">
+        <div>
+          <div style="color:var(--ink-soft);font-size:13px;margin-bottom:6px">${isWaiting ? 'Current Wait' : 'Currently With Staff'}</div>
+          <div class="timer ${size} timer-${level}">${isWaiting ? fmtDuration(visit.currentWaitSeconds) : '—'}</div>
+        </div>
+        <div>
+          <div style="color:var(--ink-soft);font-size:13px;margin-bottom:6px">Total Idle Time This Visit</div>
+          <div class="timer ${size}" style="color:var(--ink)">${fmtDuration(visit.totalIdleSeconds)}</div>
+        </div>
+      </div>
+      ${big ? '' : (next ? `<button class="btn btn-primary" style="width:100%;padding:14px" onclick="roomAct(${visit.id}, '${next.action}')">${next.label}</button>` : '')}
+    </div>
+    ${big ? `<div class="panel" style="margin-bottom:16px">
+      ${next ? `<button class="btn btn-primary btn-huge" onclick="roomAct(${visit.id}, '${next.action}')">${next.label}</button>` : '<div class="empty-state">Waiting for the front desk.</div>'}
+      <div style="text-align:center;margin-top:14px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
+        ${flagButtonHtml(visit.id, visit.treatmentFlag)}
+        ${cancelButtonHtml(visit.id)}
+      </div>
+    </div>` : ''}
+  `;
+}
+
+// One operatory: cleaning reminder, the patient in the chair, and any earlier
+// patient from this room who is now with the treatment coordinator.
+function renderRoomView(el, op, visits, rooms) {
+  const here = visits.filter((v) => v.operatory === op);
+  const current = here.find((v) => v.inRoom);
+  const earlier = here.filter((v) => !v.inRoom);
+  const room = cleaningFor(rooms, op);
+  let html = cleaningBannerHtml(op, room);
+  html += current
+    ? roomPatientHtml(current, true)
+    : `<div class="panel empty-state" style="padding:40px 20px;margin-bottom:16px">No patient in ${escapeHtml(op)} right now.${room ? '' : ' The front desk assigns rooms from the waiting room.'}</div>`;
+  for (const v of earlier) {
+    html += `<h2 style="margin:24px 0 10px;font-size:16px">Earlier patient from ${escapeHtml(op)}, now with the treatment coordinator</h2>${roomPatientHtml(v, false)}`;
+  }
+  el.innerHTML = html;
+}
+
+async function roomAct(visitId, action) {
+  try {
+    await postJSON(`/api/visits/${Number(visitId)}/transition`, { action, role: getStation() });
+    if (typeof window.__refreshCurrentPage === 'function') window.__refreshCurrentPage();
+  } catch (e) {
+    toast(e.message);
+  }
+}
+
+
+// Live Dashboard: every room currently being broken down, with its own
+// "Room ready" button.
+function brokenDownStripHtml(rooms) {
+  const list = (rooms || []).filter((r) => OPERATORIES.includes(r.operatory)).sort((a, b) => a.operatory.localeCompare(b.operatory));
+  if (!list.length) return '';
+  return `<div class="panel" style="margin-bottom:16px">
+    <h2 style="margin:0 0 10px;font-size:16px">🧽 Rooms being broken down</h2>
+    <div style="display:flex;gap:10px;flex-wrap:wrap">
+      ${list.map((r) => {
+        const op = r.operatory;
+        const mins = Math.max(0, Math.floor((Date.now() - new Date(r.cleaningSince).getTime()) / 60000));
+        return `<div class="cleaning-banner" style="margin:0;flex:1 1 240px"><span>${op}, ${mins < 1 ? 'just started' : mins + ' min'}</span><button class="btn btn-secondary" onclick="markRoomReady('${op}')">Room ready</button></div>`;
+      }).join('')}
+    </div>
+  </div>`;
 }

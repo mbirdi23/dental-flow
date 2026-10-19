@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Select Station — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<main style="max-width:720px;margin:0 auto;padding-top:10vh">
+  <div style="text-align:center;margin-bottom:24px">
+    <div style="display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:22px;color:var(--ink);margin-bottom:6px">
+      <span style="width:12px;height:12px;border-radius:50%;background:var(--teal)"></span>
+      Dental Flow
+    </div>
+    <p class="subtitle" id="greeting" style="margin:0">Which screen is this?</p>
+  </div>
+
+  <div id="stationGroups"></div>
+
+  <p style="text-align:center;color:var(--ink-soft);font-size:12px;margin-top:24px">
+    This sets which room or desk this screen is for. <a href="#" id="logoutLink">Not you? Log out</a>
+  </p>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+async function init() {
+  document.getElementById('logoutLink').addEventListener('click', (e) => { e.preventDefault(); fullLogout(); });
+
+  try {
+    const me = await getJSON('/api/me');
+    document.getElementById('greeting').textContent = `Hi ${me.displayName} — which screen is this?`;
+  } catch (e) {
+    return; // getJSON already redirects to sign-in if needed
+  }
+
+  let stations = ['Upfront', 'OP1', 'OP2', 'OP3', 'OP4', 'OP5', 'OP6', 'Lab', 'TC Room', 'Back Office'];
+  try {
+    const cfg = await getJSON('/api/config');
+    if (cfg.stations && cfg.stations.length) stations = cfg.stations;
+  } catch (e) {}
+
+  const groups = [
+    { label: 'Front Desk', match: (s) => s === 'Upfront' },
+    { label: 'Operatories', match: (s) => /^OP\d+$/.test(s) },
+    { label: 'Other', match: () => true },
+  ];
+  const used = new Set();
+  document.getElementById('stationGroups').innerHTML = groups.map((g) => {
+    const items = stations.filter((s) => !used.has(s) && g.match(s));
+    items.forEach((s) => used.add(s));
+    if (!items.length) return '';
+    const grid = items.length === 1
+      ? `<div style="max-width:200px;margin:0 auto"><button class="login-btn" data-station="${escapeHtml(items[0])}" style="width:100%">${escapeHtml(items[0])}</button></div>`
+      : `<div class="login-grid">${items.map((s) => `<button class="login-btn" data-station="${escapeHtml(s)}">${escapeHtml(s)}</button>`).join('')}</div>`;
+    return `
+      <div style="margin-bottom:28px">
+        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);margin-bottom:10px;text-align:center">${g.label}</div>
+        ${grid}
+      </div>`;
+  }).join('');
+
+  document.querySelectorAll('[data-station]').forEach((btn) => {
+    btn.addEventListener('click', () => {
+      setStation(btn.dataset.station);
+      window.location.href = stationHome(btn.dataset.station);
+    });
+  });
+}
+init();
+</script>
+</body>
+</html>

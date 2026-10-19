@@ -34,8 +34,7 @@
 <script src="/js/common.js"></script>
 <script>
 async function refresh() {
-  const res = await fetch('/api/doctor-queue');
-  const queue = await res.json();
+  const queue = await getJSON('/api/doctor-queue');
   render(queue);
 }
 window.__refreshCurrentPage = refresh;
@@ -56,7 +55,7 @@ function render(queue) {
       <div class="panel">
         <div style="color:var(--ink-soft);font-size:13px;margin-bottom:6px">${escapeHtml(v.operatory || '—')}</div>
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:10px">
-          <div style="font-size:20px;font-weight:700">Patient ${escapeHtml(v.patientId)}</div>
+          <div style="font-size:20px;font-weight:700">${patientLabel(v)}</div>
           ${editButtonHtml(v.id)}
         </div>
         ${v.treatmentFlag ? `<div style="margin-bottom:10px">${treatmentBadgeHtml(true)}</div>` : ''}
@@ -68,7 +67,7 @@ function render(queue) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 initTopbar();

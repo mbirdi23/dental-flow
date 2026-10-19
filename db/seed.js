@@ -6,8 +6,13 @@
 // Run with: npm run db:seed
 const pool = require('./pool');
 
-const WAITING_FOR = ['assistant', 'hygienist', 'doctor', 'treatment_coordinator', 'checkout'];
+const WAITING_FOR = ['assistant', 'hygienist', 'doctor', 'treatment_coordinator'];
 const OPERATORIES = ['OP1', 'OP2', 'OP3', 'OP4', 'OP5', 'OP6'];
+// Made-up names for demo data only.
+const DEMO_FIRST_NAMES = ['Ava', 'Liam', 'Maya', 'Noah', 'Zara', 'Leo', 'Priya', 'Owen', 'Isla', 'Theo'];
+function demoName() {
+  return DEMO_FIRST_NAMES[randInt(0, DEMO_FIRST_NAMES.length - 1)];
+}
 
 function randInt(min, max) {
   return Math.floor(Math.random() * (max - min + 1)) + min;
@@ -39,7 +44,12 @@ async function seedCompletedVisit(client, daysAgo) {
   );
   const visitId = rows[0].id;
 
-  for (let gapNumber = 1; gapNumber <= 5; gapNumber++) {
+  // Doing Paperwork — attended, untracked, so just advance the clock
+  // before the first real (idle) gap starts.
+  const paperworkSeconds = randInt(60, 240);
+  cursor = new Date(cursor.getTime() + paperworkSeconds * 1000);
+
+  for (let gapNumber = 1; gapNumber <= 4; gapNumber++) {
     const gapSeconds = randomGapSeconds();
     const startedAt = new Date(cursor);
     const endedAt = new Date(startedAt.getTime() + gapSeconds * 1000);
@@ -69,13 +79,12 @@ async function seedInProgressVisit(client, status, waitStartedSecondsAgo) {
     waiting_hygiene: 2,
     waiting_doctor: 3,
     waiting_tc: 4,
-    waiting_checkout: 5,
   };
 
   const { rows } = await client.query(
-    `INSERT INTO visits (patient_id, operatory, status, started_at)
-     VALUES ($1, $2, $3, now() - interval '20 minutes') RETURNING id`,
-    [patientId, gapMap[status] === null ? null : operatory, status]
+    `INSERT INTO visits (patient_id, operatory, status, started_at, patient_first_name)
+     VALUES ($1, $2, $3, now() - interval '20 minutes', $4) RETURNING id`,
+    [patientId, gapMap[status] === null ? null : operatory, status, demoName()]
   );
   const visitId = rows[0].id;
 
@@ -97,6 +106,21 @@ async function seedInProgressVisit(client, status, waitStartedSecondsAgo) {
   await client.query(
     `INSERT INTO status_events (visit_id, status) VALUES ($1, $2)`,
     [visitId, status]
+  );
+}
+
+// Doing Paperwork — attended, no gap timer at all, so this is a much
+// simpler seed than seedInProgressVisit above.
+async function seedPaperworkVisit(client) {
+  const patientId = String(randInt(1000, 9999));
+  const { rows } = await client.query(
+    `INSERT INTO visits (patient_id, status, started_at, patient_first_name)
+     VALUES ($1, 'doing_paperwork', now() - interval '3 minutes', $2) RETURNING id`,
+    [patientId, demoName()]
+  );
+  await client.query(
+    `INSERT INTO status_events (visit_id, status) VALUES ($1, 'doing_paperwork')`,
+    [rows[0].id]
   );
 }
 
@@ -140,12 +164,12 @@ async function main() {
     }
 
     // A few patients live right now, at different stages
+    await seedPaperworkVisit(client);
     await seedInProgressVisit(client, 'waiting_assistant', 90);
     await seedInProgressVisit(client, 'waiting_hygiene', 240);
     await seedInProgressVisit(client, 'waiting_doctor', 770); // red
     await seedInProgressVisit(client, 'waiting_doctor', 120); // green
     await seedInProgressVisit(client, 'waiting_tc', 340); // amber
-    await seedInProgressVisit(client, 'waiting_checkout', 60);
 
     // One no-show, so Analytics has something to show in the cancellation
     // stats right away.

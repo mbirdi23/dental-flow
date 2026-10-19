@@ -25,88 +25,48 @@
 
 <main>
   <h1>Operatories</h1>
-  <p class="subtitle">All six chairs at a glance. Act on any of them from here.</p>
-
-  <div id="grid" class="op-board-grid"></div>
+  <p class="subtitle">Pick a room to see only that room. Live Dashboard shows everyone at once.</p>
+  <div id="roomTabs" class="room-tabs" role="tablist" aria-label="Rooms"></div>
+  <h2 id="roomTitle" class="room-title"></h2>
+  <div id="content"></div>
 </main>
 
 <script src="/js/common.js"></script>
 <script>
+// Shows ONE operatory at a time. ?room=OP2 in the address picks the room
+// (so a screen can be bookmarked); otherwise the last room picked here.
+const ROOM_KEY = 'dental_flow_board_room';
+function initialRoom() {
+  const fromUrl = new URLSearchParams(window.location.search).get('room');
+  if (OPERATORIES.includes(fromUrl)) return fromUrl;
+  try {
+    const saved = localStorage.getItem(ROOM_KEY);
+    if (OPERATORIES.includes(saved)) return saved;
+  } catch (e) {}
+  return OPERATORIES[0];
+}
+let ROOM = initialRoom();
+
+function selectRoom(op) {
+  if (!OPERATORIES.includes(op)) return;
+  ROOM = op;
+  try { localStorage.setItem(ROOM_KEY, op); } catch (e) {}
+  window.history.replaceState(null, '', `/operatory?room=${encodeURIComponent(op)}`);
+  refresh();
+}
+
 async function refresh() {
-  const res = await fetch('/api/visits/active');
-  const visits = await res.json();
-  render(visits);
+  const [visits, rooms] = await Promise.all([getJSON('/api/visits/active'), getJSON('/api/rooms')]);
+  document.getElementById('roomTabs').innerHTML = OPERATORIES.map((op) => {
+    const occ = visits.find((v) => v.operatory === op && v.inRoom);
+    const state = occ ? escapeHtml(STATUS_LABEL[occ.status] || occ.status) : cleaningFor(rooms, op) ? '🧽 Being broken down' : 'Empty';
+    return `<button class="room-tab" role="tab" aria-selected="${op === ROOM}" onclick="selectRoom('${op}')"><strong>${op}</strong><span>${state}</span></button>`;
+  }).join('');
+  document.getElementById('roomTitle').textContent = ROOM;
+  renderRoomView(document.getElementById('content'), ROOM, visits, rooms);
   updateWaitingBadge(visits);
 }
 window.__refreshCurrentPage = refresh;
-
-function render(visits) {
-  const grid = document.getElementById('grid');
-  grid.innerHTML = OPERATORIES.map((op) => {
-    const visit = visits.find((v) => v.operatory === op);
-    if (!visit) {
-      return `
-        <div class="panel op-card">
-          <div class="op-card-head"><div class="op-name">${op}</div></div>
-          <div class="empty-state" style="padding:40px 10px">No patient assigned</div>
-        </div>
-      `;
-    }
-    const isWaiting = !!visit.waitingFor;
-    const level = isWaiting ? waitLevel(visit.currentWaitSeconds) : 'green';
-
-    return `
-      <div class="panel op-card">
-        <div class="op-card-head">
-          <div class="op-name">${op}</div>
-          <span class="pill ${isWaiting ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[visit.status] || visit.status)}</span>
-        </div>
-        <div style="display:flex;align-items:center;gap:8px;margin:10px 0 4px">
-          <div style="font-size:22px;font-weight:700">Patient ${escapeHtml(visit.patientId)}</div>
-          ${editButtonHtml(visit.id)}
-        </div>
-        ${visit.treatmentFlag ? `<div style="margin-bottom:12px">${treatmentBadgeHtml(true)}</div>` : '<div style="margin-bottom:16px"></div>'}
-        <div style="display:flex;gap:28px;margin-bottom:18px">
-          <div>
-            <div style="color:var(--ink-soft);font-size:12px;margin-bottom:4px">${isWaiting ? 'Current Wait' : 'With Staff'}</div>
-            ${isWaiting ? `<div class="timer timer-md timer-${level}">${fmtDuration(visit.currentWaitSeconds)}</div>` : `<div class="timer timer-md" style="color:var(--line)">—</div>`}
-          </div>
-          <div>
-            <div style="color:var(--ink-soft);font-size:12px;margin-bottom:4px">Total Idle</div>
-            <div class="timer timer-md" style="color:var(--ink)">${fmtDuration(visit.totalIdleSeconds)}</div>
-          </div>
-        </div>
-        ${renderActionButton(visit)}
-        <div style="text-align:center;margin-top:10px;display:flex;justify-content:center;gap:8px;flex-wrap:wrap">
-          ${flagButtonHtml(visit.id, visit.treatmentFlag)}
-          ${cancelButtonHtml(visit.id, visit.patientId)}
-        </div>
-      </div>
-    `;
-  }).join('');
-}
-
-function renderActionButton(visit) {
-  if (visit.nextAction) {
-    return `<button class="btn btn-primary" style="width:100%;padding:16px;font-size:15px;border-radius:10px" onclick="act(${visit.id}, '${visit.nextAction.action}')">${visit.nextAction.label}</button>`;
-  }
-  if (visit.status === 'waiting_tc' || visit.status === 'with_tc') {
-    return `<div class="empty-state" style="padding:14px 0;font-size:13px">Being handled at TC Room</div>`;
-  }
-  if (visit.status === 'waiting_checkout' || visit.status === 'with_checkout') {
-    return `<div class="empty-state" style="padding:14px 0;font-size:13px">Being handled at Front Desk</div>`;
-  }
-  return `<div class="empty-state" style="padding:14px 0;font-size:13px">Waiting for front desk hand-off</div>`;
-}
-
-async function act(visitId, action) {
-  try {
-    await postJSON(`/api/visits/${visitId}/transition`, { action, role: getStation() });
-    refresh();
-  } catch (e) {
-    toast(e.message);
-  }
-}
 
 if (!redirectOpStationAwayFromBoard()) {
   initTopbar();

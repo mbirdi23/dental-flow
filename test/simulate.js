@@ -9,7 +9,8 @@
 // Run with: node test/simulate.js
 
 const assert = require('assert');
-const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS } = require('../lib/flow');
+const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, FULL_NEXT_ACTION, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS } = require('../lib/flow');
+const IN_ROOM = ['with_assistant', 'waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor', 'waiting_tc', 'with_tc'];
 
 let now = 1000000; // fake clock, in ms, advanced manually so tests are deterministic
 function clockNow() { return now; }
@@ -28,7 +29,7 @@ function findOpenGap(db, visitId) {
 
 function isOperatoryOccupied(db, visitId, operatory) {
   for (const v of db.visits.values()) {
-    if (v.id !== visitId && v.operatory === operatory && v.status !== 'completed' && v.status !== 'cancelled') return true;
+    if (v.id !== visitId && v.operatory === operatory && IN_ROOM.includes(v.status)) return true;
   }
   return false;
 }
@@ -40,6 +41,10 @@ function isPatientAlreadyActive(db, patientId) {
   return false;
 }
 
+// Check-in only gets a patient to "Doing Paperwork" — attended, no timer.
+// This matches the real app exactly: Front Desk's check-in button calls
+// `start_paperwork`, and a separate "Done — Send to Waiting Room" button
+// calls `ready_for_assistant` once paperwork's finished.
 function checkIn(db, patientId, role) {
   if (isPatientAlreadyActive(db, patientId)) {
     throw new Error(`Patient ${patientId} already has an active visit`);
@@ -47,8 +52,16 @@ function checkIn(db, patientId, role) {
   const id = db.nextVisitId++;
   const visit = { id, patientId, operatory: null, status: 'arrived', startedAt: clockNow(), completedAt: null, treatmentFlag: false };
   db.visits.set(id, visit);
-  transition(db, id, 'ready_for_assistant', { role });
+  transition(db, id, 'start_paperwork', { role });
   return visit;
+}
+
+// Convenience for tests that don't care about the paperwork stage itself
+// and just want a patient sitting in the Waiting Room with Gap 1 running.
+function checkInAndReachWaitingRoom(db, patientId, role) {
+  const v = checkIn(db, patientId, role);
+  transition(db, v.id, 'ready_for_assistant', { role });
+  return v;
 }
 
 function transition(db, visitId, action, extra = {}) {
@@ -96,6 +109,7 @@ function override(db, visitId, updates, role) {
   const visit = db.visits.get(visitId);
   if (!visit) throw new Error('Visit not found');
   const changes = [];
+  let flagChanged = false;
 
   if (updates.patientId !== undefined && updates.patientId.trim() && updates.patientId.trim() !== visit.patientId) {
     const cleanId = updates.patientId.trim();
@@ -138,13 +152,14 @@ function override(db, visitId, updates, role) {
   }
 
   if (typeof updates.treatmentFlag === 'boolean' && updates.treatmentFlag !== visit.treatmentFlag) {
+    flagChanged = true;
     changes.push(updates.treatmentFlag ? 'Flagged for treatment' : 'Treatment flag removed');
     visit.treatmentFlag = updates.treatmentFlag;
   }
 
   if (changes.length) {
     const isCancel = updates.status === 'cancelled';
-    const isFlagOnly = !isCancel && changes.length === 1 && typeof updates.treatmentFlag === 'boolean';
+    const isFlagOnly = !isCancel && changes.length === 1 && flagChanged;
     db.activityLog.push({
       id: db.nextLogId++, visitId, patientId: visit.patientId, station: role || 'Unknown',
       action: isCancel ? 'cancel_visit' : isFlagOnly ? 'toggle_flag' : 'manual_edit',
@@ -188,7 +203,14 @@ console.log('\n1. Happy path: full visit start to finish\n');
   const db = freshDb();
   const v = checkIn(db, '1001', 'Upfront');
 
-  test('check-in starts Gap 1 (assistant/hygienist) immediately', () => {
+  test('check-in lands in Doing Paperwork — attended, no timer running yet', () => {
+    assert.strictEqual(v.status, 'doing_paperwork');
+    assert.strictEqual(findOpenGap(db, v.id), null);
+  });
+
+  transition(db, v.id, 'ready_for_assistant', { role: 'Upfront' });
+
+  test('finishing paperwork starts Gap 1 (assistant/hygienist)', () => {
     assert.strictEqual(v.status, 'waiting_assistant');
     const open = findOpenGap(db, v.id);
     assert.strictEqual(open.gapNumber, 1);
@@ -222,15 +244,17 @@ console.log('\n1. Happy path: full visit start to finish\n');
 
   advance(30);
   transition(db, v.id, 'with_tc', { role: 'TC Room' });
-  transition(db, v.id, 'waiting_checkout', { role: 'TC Room' });
-  advance(45);
-  transition(db, v.id, 'with_checkout', { role: 'Upfront' });
+
+  test('finishing with TC completes the visit directly — no checkout stage anymore', () => {
+    assert.ok(TC_NEXT_ACTION['with_tc'].action === 'complete');
+  });
+
   transition(db, v.id, 'complete', { role: 'Upfront' });
 
-  test('visit completes and total idle time is the sum of all 5 gaps only', () => {
+  test('visit completes and total idle time is the sum of all 4 gaps only', () => {
     assert.strictEqual(v.status, 'completed');
-    // 90 (assistant) + 60 (hygienist) + 400 (doctor) + 30 (tc) + 45 (checkout) = 625
-    assert.strictEqual(totalIdleSeconds(db, v.id), 625);
+    // 90 (assistant) + 60 (hygienist) + 400 (doctor) + 30 (tc) = 580
+    assert.strictEqual(totalIdleSeconds(db, v.id), 580);
   });
 
   test('a completed visit no longer appears in active views', () => {
@@ -239,14 +263,26 @@ console.log('\n1. Happy path: full visit start to finish\n');
 
   test('every step was logged to the activity log with the right station', () => {
     const stations = db.activityLog.filter((e) => e.visitId === v.id).map((e) => e.station);
-    assert.deepStrictEqual(stations, ['Upfront', 'Upfront', 'OP1', 'OP1', 'OP1', 'OP1', 'OP1', 'TC Room', 'TC Room', 'Upfront', 'Upfront']);
+    assert.deepStrictEqual(stations, ['Upfront', 'Upfront', 'Upfront', 'OP1', 'OP1', 'OP1', 'OP1', 'OP1', 'TC Room', 'Upfront']);
   });
 }
 
-console.log('\n2. Patient never gets pulled back (no-show from the Waiting Room)\n');
+console.log('\n2. Patient leaves during paperwork, before ever waiting\n');
 {
   const db = freshDb();
-  const v = checkIn(db, '2002', 'Upfront');
+  const v = checkIn(db, '2000', 'Upfront');
+
+  test('cancelling straight out of Doing Paperwork needs no gap to close', () => {
+    override(db, v.id, { status: 'cancelled' }, 'Upfront');
+    assert.strictEqual(v.status, 'cancelled');
+    assert.strictEqual([...db.gapEvents.values()].filter((g) => g.visitId === v.id).length, 0);
+  });
+}
+
+console.log('\n3. Patient never gets pulled back (no-show from the Waiting Room)\n');
+{
+  const db = freshDb();
+  const v = checkInAndReachWaitingRoom(db, '2002', 'Upfront');
   advance(1200); // 20 minutes, nobody ever comes
 
   test('cancelling from the Waiting Room closes Gap 1 without starting a new gap', () => {
@@ -268,10 +304,10 @@ console.log('\n2. Patient never gets pulled back (no-show from the Waiting Room)
   });
 }
 
-console.log('\n3. Patient walks out mid-treatment (leaves while waiting for the doctor)\n');
+console.log('\n4. Patient walks out mid-treatment (leaves while waiting for the doctor)\n');
 {
   const db = freshDb();
-  const v = checkIn(db, '3003', 'Upfront');
+  const v = checkInAndReachWaitingRoom(db, '3003', 'Upfront');
   transition(db, v.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' });
   transition(db, v.id, 'waiting_hygiene', { role: 'OP2' });
   transition(db, v.id, 'with_hygiene', { role: 'OP2' });
@@ -289,12 +325,12 @@ console.log('\n3. Patient walks out mid-treatment (leaves while waiting for the 
   });
 }
 
-console.log('\n4. Front-desk data-entry guards\n');
+console.log('\n5. Front-desk data-entry guards\n');
 {
   const db = freshDb();
   checkIn(db, '4004', 'Upfront');
 
-  test('checking in the same active patient ID twice is rejected', () => {
+  test('checking in the same active patient ID twice is rejected, even mid-paperwork', () => {
     assert.throws(() => checkIn(db, '4004', 'Upfront'), /already has an active visit/);
   });
 
@@ -304,6 +340,7 @@ console.log('\n4. Front-desk data-entry guards\n');
 
   test('once the first patient completes, the ID can be reused', () => {
     const first = [...db.visits.values()].find((v) => v.patientId === '4004');
+    transition(db, first.id, 'ready_for_assistant', { role: 'Upfront' });
     transition(db, first.id, 'assign_operatory', { operatory: 'OP3', role: 'Upfront' });
     transition(db, first.id, 'waiting_hygiene', { role: 'OP3' });
     transition(db, first.id, 'with_hygiene', { role: 'OP3' });
@@ -311,18 +348,16 @@ console.log('\n4. Front-desk data-entry guards\n');
     transition(db, first.id, 'with_doctor', { role: 'OP3' });
     transition(db, first.id, 'waiting_tc', { role: 'OP3' });
     transition(db, first.id, 'with_tc', { role: 'TC Room' });
-    transition(db, first.id, 'waiting_checkout', { role: 'TC Room' });
-    transition(db, first.id, 'with_checkout', { role: 'Upfront' });
     transition(db, first.id, 'complete', { role: 'Upfront' });
     assert.doesNotThrow(() => checkIn(db, '4004', 'Upfront'));
   });
 }
 
-console.log('\n5. Two rooms, one mistake: double-booking an operatory\n');
+console.log('\n6. Two rooms, one mistake: double-booking an operatory\n');
 {
   const db = freshDb();
-  const a = checkIn(db, '5005', 'Upfront');
-  const b = checkIn(db, '5006', 'Upfront');
+  const a = checkInAndReachWaitingRoom(db, '5005', 'Upfront');
+  const b = checkInAndReachWaitingRoom(db, '5006', 'Upfront');
   transition(db, a.id, 'assign_operatory', { operatory: 'OP4', role: 'Upfront' });
 
   test('assigning a second patient to an already-occupied room is rejected', () => {
@@ -338,10 +373,10 @@ console.log('\n5. Two rooms, one mistake: double-booking an operatory\n');
   });
 }
 
-console.log('\n6. Fixing a fat-fingered Patient ID and a wrong button press\n');
+console.log('\n7. Fixing a fat-fingered Patient ID and a wrong button press\n');
 {
   const db = freshDb();
-  const v = checkIn(db, '60O1', 'Upfront'); // typo: letter O instead of zero
+  const v = checkInAndReachWaitingRoom(db, '60O1', 'Upfront'); // typo: letter O instead of zero
   transition(db, v.id, 'assign_operatory', { operatory: 'OP6', role: 'Upfront' });
   transition(db, v.id, 'waiting_hygiene', { role: 'OP6' });
   advance(50);
@@ -365,12 +400,12 @@ console.log('\n6. Fixing a fat-fingered Patient ID and a wrong button press\n');
   });
 }
 
-console.log('\n7. Analytics correctness: cancelled visits must not pollute wait-time stats\n');
+console.log('\n8. Analytics correctness: cancelled visits must not pollute wait-time stats\n');
 {
   const db = freshDb();
 
   // One clean completed visit with a known 100s doctor wait.
-  const good = checkIn(db, '7001', 'Upfront');
+  const good = checkInAndReachWaitingRoom(db, '7001', 'Upfront');
   transition(db, good.id, 'assign_operatory', { operatory: 'OP1', role: 'Upfront' });
   transition(db, good.id, 'waiting_hygiene', { role: 'OP1' });
   transition(db, good.id, 'with_hygiene', { role: 'OP1' });
@@ -379,12 +414,10 @@ console.log('\n7. Analytics correctness: cancelled visits must not pollute wait-
   transition(db, good.id, 'with_doctor', { role: 'OP1' });
   transition(db, good.id, 'waiting_tc', { role: 'OP1' });
   transition(db, good.id, 'with_tc', { role: 'TC Room' });
-  transition(db, good.id, 'waiting_checkout', { role: 'TC Room' });
-  transition(db, good.id, 'with_checkout', { role: 'Upfront' });
   transition(db, good.id, 'complete', { role: 'Upfront' });
 
   // One cancelled visit with a huge 5000s doctor wait that must NOT drag the average up.
-  const bad = checkIn(db, '7002', 'Upfront');
+  const bad = checkInAndReachWaitingRoom(db, '7002', 'Upfront');
   transition(db, bad.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' });
   transition(db, bad.id, 'waiting_hygiene', { role: 'OP2' });
   transition(db, bad.id, 'with_hygiene', { role: 'OP2' });
@@ -414,12 +447,12 @@ console.log('\n7. Analytics correctness: cancelled visits must not pollute wait-
   });
 }
 
-console.log('\n8. Waiting Room badge / sort order reflects reality\n');
+console.log('\n9. Waiting Room badge / sort order reflects reality\n');
 {
   const db = freshDb();
-  const a = checkIn(db, '8001', 'Upfront');
+  const a = checkInAndReachWaitingRoom(db, '8001', 'Upfront');
   advance(30);
-  const b = checkIn(db, '8002', 'Upfront');
+  const b = checkInAndReachWaitingRoom(db, '8002', 'Upfront');
   advance(30); // a has now waited 60s, b has waited 30s
 
   test('the waiting room count only includes patients actually in that stage', () => {
@@ -436,7 +469,7 @@ console.log('\n8. Waiting Room badge / sort order reflects reality\n');
   });
 }
 
-console.log('\n9. Editing a Patient ID must not collide with another active patient\n');
+console.log('\n10. Editing a Patient ID must not collide with another active patient\n');
 {
   const db = freshDb();
   const a = checkIn(db, '9001', 'Upfront');
@@ -457,18 +490,19 @@ console.log('\n9. Editing a Patient ID must not collide with another active pati
   });
 }
 
-console.log('\n10. My Room (a single OP station) can carry a visit all the way to completion\n');
+console.log('\n11. My Room (a single OP station) can carry a visit all the way to completion\n');
 {
-  const { FULL_NEXT_ACTION } = require('../lib/flow');
   const db = freshDb();
-  const v = checkIn(db, '10001', 'Upfront');
+  const v = checkInAndReachWaitingRoom(db, '10001', 'Upfront');
   transition(db, v.id, 'assign_operatory', { operatory: 'OP1', role: 'Upfront' });
 
-  test('FULL_NEXT_ACTION has an entry for every status from with_assistant through with_checkout', () => {
-    const expectedStatuses = ['with_assistant', 'waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor', 'waiting_tc', 'with_tc', 'waiting_checkout', 'with_checkout'];
+  test('FULL_NEXT_ACTION has an entry for every status from with_assistant through with_tc, and no checkout stages', () => {
+    const expectedStatuses = ['with_assistant', 'waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor', 'waiting_tc', 'with_tc'];
     for (const s of expectedStatuses) {
       assert.ok(FULL_NEXT_ACTION[s], `missing FULL_NEXT_ACTION entry for ${s}`);
     }
+    assert.strictEqual(FULL_NEXT_ACTION['waiting_checkout'], undefined);
+    assert.strictEqual(FULL_NEXT_ACTION['with_checkout'], undefined);
   });
 
   test('driving the visit using only FULL_NEXT_ACTION actions reaches "completed"', () => {
@@ -489,10 +523,10 @@ console.log('\n10. My Room (a single OP station) can carry a visit all the way t
   });
 }
 
-console.log('\n11. Treatment flag: visual only, never touches timers or thresholds\n');
+console.log('\n12. Treatment flag: visual only, never touches timers or thresholds\n');
 {
   const db = freshDb();
-  const v = checkIn(db, '11001', 'Upfront');
+  const v = checkInAndReachWaitingRoom(db, '11001', 'Upfront');
   transition(db, v.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' });
   transition(db, v.id, 'waiting_hygiene', { role: 'OP2' });
   advance(45);
@@ -537,11 +571,38 @@ console.log('\n11. Treatment flag: visual only, never touches timers or threshol
     transition(db, v.id, 'with_doctor', { role: 'OP2' });
     transition(db, v.id, 'waiting_tc', { role: 'OP2' });
     transition(db, v.id, 'with_tc', { role: 'TC Room' });
-    transition(db, v.id, 'waiting_checkout', { role: 'TC Room' });
-    transition(db, v.id, 'with_checkout', { role: 'Upfront' });
     transition(db, v.id, 'complete', { role: 'Upfront' });
     assert.strictEqual(v.treatmentFlag, true);
     assert.strictEqual(v.status, 'completed');
+  });
+}
+
+console.log('\n13. Edit panel sends every field — only real changes should be labelled\n');
+{
+  const db = freshDb();
+  const v = checkIn(db, '12001', 'Upfront');
+
+  test('fixing only the Patient ID (with the unchanged flag also sent) is logged as a manual edit, not a flag change', () => {
+    override(db, v.id, { patientId: '12002', treatmentFlag: false }, 'Upfront');
+    const entry = db.activityLog[db.activityLog.length - 1];
+    assert.strictEqual(entry.action, 'manual_edit');
+  });
+}
+
+console.log('\n14. Room turnover: a room stays taken until the visit is completed\n');
+{
+  const db = freshDb();
+  const a = checkInAndReachWaitingRoom(db, '14001', 'Upfront');
+  const b = checkInAndReachWaitingRoom(db, '14002', 'Upfront');
+  transition(db, a.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' });
+  for (const s of ['waiting_hygiene', 'with_hygiene', 'waiting_doctor', 'with_doctor', 'waiting_tc', 'with_tc']) transition(db, a.id, s, { role: 'OP2' });
+
+  test('while the patient is with the treatment coordinator, OP2 is still taken', () => {
+    assert.throws(() => transition(db, b.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' }), /already has a patient/);
+  });
+  test('once the visit is completed, the next patient can be seated in OP2', () => {
+    transition(db, a.id, 'complete', { role: 'OP2' });
+    assert.doesNotThrow(() => transition(db, b.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' }));
   });
 }
 

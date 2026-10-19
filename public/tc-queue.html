@@ -34,12 +34,12 @@
 <script src="/js/common.js"></script>
 <script>
 async function refresh() {
-  const [queueRes, activeRes] = await Promise.all([
-    fetch('/api/tc-queue'),
-    fetch('/api/visits/active'),
+  const [queue, active] = await Promise.all([
+    getJSON('/api/tc-queue'),
+    getJSON('/api/visits/active'),
   ]);
-  render(await queueRes.json());
-  updateWaitingBadge(await activeRes.json());
+  render(queue);
+  updateWaitingBadge(active);
 }
 window.__refreshCurrentPage = refresh;
 
@@ -63,7 +63,7 @@ function render(queue) {
           <span class="pill ${isWaiting ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[v.status] || v.status)}</span>
         </div>
         <div style="display:flex;align-items:center;gap:6px;margin-bottom:12px">
-          <div style="font-size:18px;font-weight:700">Patient ${escapeHtml(v.patientId)}</div>
+          <div style="font-size:18px;font-weight:700">${patientLabel(v)}</div>
           ${editButtonHtml(v.id)}
         </div>
         ${v.treatmentFlag ? `<div style="margin-bottom:12px">${treatmentBadgeHtml(true)}</div>` : ''}
@@ -85,7 +85,7 @@ async function act(visitId, action) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 initTopbar();

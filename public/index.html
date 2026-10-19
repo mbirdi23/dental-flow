@@ -25,23 +25,28 @@
 
 <main>
   <h1>Front Desk</h1>
-  <p class="subtitle">Check patients in, hand them to the assistant, and close out visits at checkout.</p>
+  <p class="subtitle">Check patients in, help with paperwork, send them to the waiting room, and complete visits once TC is done.</p>
 
   <div class="grid grid-2">
     <div class="panel">
       <h2>Check In</h2>
       <form id="checkinForm">
-        <label for="patientId">Patient ID</label>
-        <input type="text" id="patientId" placeholder="e.g. 8472" autocomplete="off" maxlength="40" required />
+        <div class="names-only">
+          <label for="firstName">First Name</label>
+          <input type="text" id="firstName" placeholder="e.g. Sarah" autocomplete="off" maxlength="40" />
+          <div style="height:14px"></div>
+        </div>
+        <label for="patientId">Patient ID (optional)</label>
+        <input type="text" id="patientId" placeholder="e.g. 8472" autocomplete="off" maxlength="40" />
         <div style="height:14px"></div>
-        <button type="submit" class="btn btn-primary btn-huge">Add to Waiting Room</button>
+        <button type="submit" class="btn btn-primary btn-huge">Check In</button>
       </form>
     </div>
 
     <div class="panel">
-      <h2>Waiting Room</h2>
-      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Waiting for an assistant or hygienist to pull them back.</p>
-      <div id="waitingAssistantList"></div>
+      <h2>Doing Paperwork</h2>
+      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Attended — no timer runs here. Send to the waiting room once they're done.</p>
+      <div id="paperworkList"></div>
     </div>
   </div>
 
@@ -49,12 +54,15 @@
 
   <div class="grid grid-2">
     <div class="panel">
-      <h2>Ready for Checkout</h2>
-      <div id="waitingCheckoutList"></div>
+      <h2>Waiting Room</h2>
+      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Waiting for an assistant or hygienist to pull them back. 🧽 means the room is still being broken down.</p>
+      <div id="waitingAssistantList"></div>
     </div>
+
     <div class="panel">
-      <h2>At Checkout</h2>
-      <div id="withCheckoutList"></div>
+      <h2>Ready to Complete</h2>
+      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Treatment coordinator is done — wrap up and complete the visit.</p>
+      <div id="readyToCompleteList"></div>
     </div>
   </div>
 </main>
@@ -62,18 +70,33 @@
 <script src="/js/common.js"></script>
 <script>
 async function refresh() {
-  const res = await fetch('/api/visits/active');
-  const visits = await res.json();
-  const occupiedOps = new Map(visits.filter(v => v.operatory).map(v => [v.operatory, v.patientId]));
+  const visits = await getJSON('/api/visits/active');
+  const rooms = await getJSON('/api/rooms');
+  const occupiedOps = new Map(visits.filter(v => v.operatory).filter(v => v.inRoom).map(v => [v.operatory, v.firstName || v.patientId || 'a patient']));
 
-  renderWaitingAssistant(visits.filter(v => v.status === 'waiting_assistant'), occupiedOps);
-  renderWaitingCheckout(visits.filter(v => v.status === 'waiting_checkout'));
-  renderWithCheckout(visits.filter(v => v.status === 'with_checkout'));
+  renderPaperwork(visits.filter(v => v.status === 'doing_paperwork'));
+  renderWaitingAssistant(visits.filter(v => v.status === 'waiting_assistant'), occupiedOps, rooms);
+  renderReadyToComplete(visits.filter(v => v.status === 'with_tc'));
   updateWaitingBadge(visits);
 }
 window.__refreshCurrentPage = refresh;
 
-function renderWaitingAssistant(visits, occupiedOps) {
+function renderPaperwork(visits) {
+  const el = document.getElementById('paperworkList');
+  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one doing paperwork.</div>'; return; }
+  el.innerHTML = visits.map(v => `
+    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">
+      <div style="display:flex;align-items:center;gap:6px">
+        <strong>${patientLabel(v)}</strong>
+        ${editButtonHtml(v.id)}
+        ${treatmentBadgeHtml(v.treatmentFlag)}
+      </div>
+      <button class="btn btn-primary" onclick="doTransition(${v.id}, 'ready_for_assistant')">Done — Send to Waiting Room</button>
+    </div>
+  `).join('');
+}
+
+function renderWaitingAssistant(visits, occupiedOps, rooms = []) {
   const el = document.getElementById('waitingAssistantList');
   if (!visits.length) { el.innerHTML = '<div class="empty-state">No one waiting.</div>'; return; }
   const sorted = [...visits].sort((a, b) => b.currentWaitSeconds - a.currentWaitSeconds);
@@ -81,7 +104,7 @@ function renderWaitingAssistant(visits, occupiedOps) {
     <div style="padding:12px 0;border-bottom:1px solid var(--line)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
         <div style="display:flex;align-items:center;gap:6px">
-          <strong>Patient ${escapeHtml(v.patientId)}</strong>
+          <strong>${patientLabel(v)}</strong>
           ${editButtonHtml(v.id)}
           ${treatmentBadgeHtml(v.treatmentFlag)}
         </div>
@@ -90,7 +113,7 @@ function renderWaitingAssistant(visits, occupiedOps) {
       <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
         ${OPERATORIES.map(op => {
           const occupiedBy = occupiedOps.get(op);
-          return `<button class="btn btn-secondary" ${occupiedBy ? 'disabled title="Occupied by patient ' + escapeHtml(occupiedBy) + '"' : ''} data-visit="${v.id}" data-op="${op}" onclick="assignOperatory(${v.id}, '${op}')" style="${occupiedBy ? 'opacity:.4;cursor:not-allowed' : ''}">${op}${occupiedBy ? ' •' : ''}</button>`;
+          return `<button class="btn btn-secondary" ${occupiedBy ? 'disabled title="Occupied by patient ' + escapeHtml(occupiedBy) + '"' : ''} data-visit="${v.id}" data-op="${op}" onclick="assignOperatory(${v.id}, '${op}')" style="${occupiedBy ? 'opacity:.4;cursor:not-allowed' : ''}">${op}${occupiedBy ? ' •' : (cleaningFor(rooms, op) ? ' 🧽' : '')}</button>`;
         }).join('')}
       </div>
       <div style="text-align:right">${cancelButtonHtml(v.id, v.patientId)}</div>
@@ -98,33 +121,14 @@ function renderWaitingAssistant(visits, occupiedOps) {
   `).join('');
 }
 
-function renderWaitingCheckout(visits) {
-  const el = document.getElementById('waitingCheckoutList');
-  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one waiting.</div>'; return; }
+function renderReadyToComplete(visits) {
+  const el = document.getElementById('readyToCompleteList');
+  if (!visits.length) { el.innerHTML = '<div class="empty-state">Nobody ready to complete.</div>'; return; }
   el.innerHTML = visits.map(v => `
     <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">
       <div>
         <div style="display:flex;align-items:center;gap:6px">
-          <strong>Patient ${escapeHtml(v.patientId)}</strong>
-          ${editButtonHtml(v.id)}
-          ${treatmentBadgeHtml(v.treatmentFlag)}
-        </div>
-        <div style="color:var(--ink-soft);font-size:13px">${escapeHtml(v.operatory || '')}</div>
-      </div>
-      <span class="timer timer-sm timer-${waitLevel(v.currentWaitSeconds)}">${fmtDuration(v.currentWaitSeconds)}</span>
-      <button class="btn btn-primary" onclick="doTransition(${v.id}, 'with_checkout')">I'm With Patient</button>
-    </div>
-  `).join('');
-}
-
-function renderWithCheckout(visits) {
-  const el = document.getElementById('withCheckoutList');
-  if (!visits.length) { el.innerHTML = '<div class="empty-state">Nobody at checkout.</div>'; return; }
-  el.innerHTML = visits.map(v => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">
-      <div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <strong>Patient ${escapeHtml(v.patientId)}</strong>
+          <strong>${patientLabel(v)}</strong>
           ${editButtonHtml(v.id)}
           ${treatmentBadgeHtml(v.treatmentFlag)}
         </div>
@@ -152,19 +156,22 @@ async function doTransition(visitId, action) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 document.getElementById('checkinForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const input = document.getElementById('patientId');
+  const nameInput = document.getElementById('firstName');
   const patientId = input.value.trim();
-  if (!patientId) return;
+  const firstName = nameInput.value.trim();
+  if (!patientId && !firstName) { toast('Enter a first name or a Patient ID'); return; }
   try {
-    const visit = await postJSON('/api/visits', { patient_id: patientId });
-    await postJSON(`/api/visits/${visit.id}/transition`, { action: 'ready_for_assistant', role: getStation() });
-    toast(`Patient ${patientId} checked in`);
+    const visit = await postJSON('/api/visits', { patient_id: patientId || null, patient_first_name: firstName || null });
+    await postJSON(`/api/visits/${visit.id}/transition`, { action: 'start_paperwork', role: getStation() });
+    toast(`${firstName || 'Patient ' + patientId} checked in`);
     input.value = '';
+    nameInput.value = '';
     refresh();
   } catch (e2) { toast(e2.message); }
 });

@@ -96,7 +96,7 @@
 
 <script src="/js/common.js"></script>
 <script>
-const GAP_LABELS = { 1:'Assistant', 2:'Hygienist', 3:'Doctor', 4:'Treatment Coordinator', 5:'Checkout' };
+const GAP_LABELS = { 1:'Assistant', 2:'Hygienist', 3:'Doctor', 4:'Treatment Coordinator' };
 const DOW_LABELS = ['Sun','Mon','Tue','Wed','Thu','Fri','Sat'];
 let currentRange = 'today';
 
@@ -130,7 +130,7 @@ function render(data) {
     <div class="stat-card"><div class="label">Cancellation Rate</div><div class="value">${data.cancelledRate}%</div></div>
   `;
 
-  document.getElementById('byGapRows').innerHTML = [1,2,3,4,5].map(n => {
+  document.getElementById('byGapRows').innerHTML = [1,2,3,4].map(n => {
     const row = data.averageByGap.find(r => r.gap_number === n);
     return `<tr><td>Gap ${n}</td><td>${GAP_LABELS[n]}</td><td>${row ? fmtSec(row.avg_seconds) : '—'}</td><td>${row ? row.n : 0}</td></tr>`;
   }).join('');
@@ -139,7 +139,7 @@ function render(data) {
   document.getElementById('worstGap').outerHTML = wg
     ? `<div id="worstGap">
         <div style="font-size:13px;color:var(--ink-soft);margin-bottom:6px">Gap ${wg.gap_number} — ${GAP_LABELS[wg.gap_number] || wg.waiting_for}</div>
-        <div style="font-size:15px;margin-bottom:10px">Patient ${escapeHtml(wg.patient_id)} · ${escapeHtml(wg.operatory || '—')}</div>
+        <div style="font-size:15px;margin-bottom:10px">${wg.patient_id ? 'Patient ' + escapeHtml(wg.patient_id) : 'Visit ' + wg.visit_id} · ${escapeHtml(wg.operatory || '—')}</div>
         <div class="timer timer-lg timer-red">${fmtDuration(wg.duration_seconds)}</div>
       </div>`
     : `<div id="worstGap" class="empty-state">No data for this range.</div>`;
@@ -158,7 +158,7 @@ function render(data) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 document.querySelectorAll('#filters [data-range]').forEach(btn => {

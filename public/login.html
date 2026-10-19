@@ -8,73 +8,77 @@
 </head>
 <body>
 
-<main style="max-width:720px;margin:0 auto;padding-top:12vh">
-  <div style="text-align:center;margin-bottom:36px">
+<main style="max-width:380px;margin:0 auto;padding-top:14vh">
+  <div style="text-align:center;margin-bottom:28px">
     <div style="display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:22px;color:var(--ink);margin-bottom:6px">
       <span style="width:12px;height:12px;border-radius:50%;background:var(--teal)"></span>
       Dental Flow
     </div>
-    <p class="subtitle" style="margin:0">Select this station to sign in.</p>
+    <p class="subtitle" style="margin:0">Sign in to continue.</p>
   </div>
 
-  <div id="stationGroups"></div>
+  <div id="notice" class="notice" style="display:none"></div>
 
-  <p style="text-align:center;color:var(--ink-soft);font-size:12px;margin-top:24px">
-    This just picks which screen you're using — no password needed.
-  </p>
+  <div class="panel">
+    <form id="loginForm">
+      <label for="username">Username</label>
+      <input type="text" id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      <div style="height:14px"></div>
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" required />
+      <div style="height:16px"></div>
+      <div id="loginError" class="edit-error"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;font-size:15px">Sign In</button>
+    </form>
+  </div>
+  <p style="text-align:center;color:var(--ink-soft);font-size:12px;margin-top:16px">Forgot your password? Ask an admin to reset it.</p>
 </main>
 
 <script src="/js/common.js"></script>
 <script>
-async function init() {
-  let stations = ['Upfront','OP1','OP2','OP3','OP4','OP5','OP6','Lab','TC Room','Back Office'];
-  try {
-    const res = await fetch('/api/config');
-    const cfg = await res.json();
-    if (cfg.stations && cfg.stations.length) stations = cfg.stations;
-  } catch (e) {
-    // fall back to the default list above
-  }
-
-  const routeFor = (s) => {
-    if (s === 'Upfront') return '/';
-    if (/^OP\d+$/.test(s)) return '/my-room';
-    if (s === 'TC Room') return '/tc-queue';
-    if (s === 'Lab') return '/dashboard';
-    if (s === 'Back Office') return '/analytics';
-    return '/';
-  };
-
-  const groups = [
-    { label: 'Front Desk', match: (s) => s === 'Upfront' },
-    { label: 'Operatories', match: (s) => /^OP\d+$/.test(s) },
-    { label: 'Other', match: (s) => true },
-  ];
-
-  const container = document.getElementById('stationGroups');
-  container.innerHTML = groups.map((g) => {
-    const remaining = stations.filter((s) => g.match(s) && !groups.slice(0, groups.indexOf(g)).some((prev) => prev.match(s)));
-    if (!remaining.length) return '';
-    const gridHtml = remaining.length === 1
-      ? `<div style="max-width:200px;margin:0 auto"><button class="login-btn" data-station="${remaining[0]}" style="width:100%">${remaining[0]}</button></div>`
-      : `<div class="login-grid">${remaining.map((s) => `<button class="login-btn" data-station="${s}">${s}</button>`).join('')}</div>`;
-    return `
-      <div style="margin-bottom:28px">
-        <div style="font-size:12px;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;color:var(--ink-soft);margin-bottom:10px;text-align:center">${g.label}</div>
-        ${gridHtml}
-      </div>
-    `;
-  }).join('');
-
-  container.querySelectorAll('[data-station]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      const s = btn.dataset.station;
-      setStation(s);
-      window.location.href = routeFor(s);
-    });
-  });
+const NOTICES = {
+  idle: 'You were signed out after a period of inactivity.',
+  expired: 'Your session expired. Please sign in again.',
+  'signed-out': 'Please sign in to continue.',
+};
+const reason = new URLSearchParams(window.location.search).get('reason');
+if (NOTICES[reason]) {
+  const el = document.getElementById('notice');
+  el.textContent = NOTICES[reason];
+  el.style.display = 'block';
 }
-init();
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('loginError');
+  const button = e.target.querySelector('button');
+  errorEl.textContent = '';
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      errorEl.textContent = data.error || 'Sign in failed';
+      document.getElementById('password').value = '';
+      return;
+    }
+    if (data.mustChangePassword) { window.location.href = '/change-password'; return; }
+    const station = getStation();
+    window.location.href = station ? stationHome(station) : '/station';
+  } catch (err) {
+    errorEl.textContent = 'Something went wrong — check your connection and try again';
+  } finally {
+    button.disabled = false;
+  }
+});
 </script>
 </body>
 </html>

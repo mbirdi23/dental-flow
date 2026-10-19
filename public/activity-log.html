@@ -32,6 +32,7 @@
       <thead>
         <tr>
           <th>Time</th>
+          <th>By</th>
           <th>Station</th>
           <th>Patient</th>
           <th>Action</th>
@@ -47,10 +48,9 @@
 <script src="/js/common.js"></script>
 <script>
 async function refresh() {
-  const res = await fetch('/api/activity-log?limit=200');
-  const entries = await res.json();
+  const entries = await getJSON('/api/activity-log?limit=200');
   render(entries);
-  fetch('/api/visits/active').then(r => r.json()).then(updateWaitingBadge).catch(() => {});
+  getJSON('/api/visits/active').then(updateWaitingBadge).catch(() => {});
 }
 window.__refreshCurrentPage = refresh;
 
@@ -67,8 +67,9 @@ function render(entries) {
   tbody.innerHTML = entries.map(e => `
     <tr style="${e.action === 'manual_edit' ? 'background:var(--amber-bg)' : ''}">
       <td style="color:var(--ink-soft);font-family:var(--mono);font-size:12px;white-space:nowrap">${formatTime(e.created_at)}</td>
+      <td>${escapeHtml(e.performed_by || '—')}</td>
       <td><span class="pill pill-neutral">${escapeHtml(e.station)}</span></td>
-      <td><strong>${escapeHtml(e.patient_id || '—')}</strong></td>
+      <td><strong>${escapeHtml(e.patient_id || (e.visit_id ? 'Visit ' + e.visit_id : '—'))}</strong></td>
       <td>${escapeHtml(e.label)}</td>
       <td style="color:var(--ink-soft)">${escapeHtml(e.details || '')}</td>
     </tr>

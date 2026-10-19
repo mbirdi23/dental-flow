@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Admin — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span>Dental Flow</div>
+  <div class="station-pill"></div>
+  <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
+  <nav>
+    <a href="/">Front Desk</a>
+    <a href="/operatory">Operatories</a>
+    <a href="/tc-queue">TC Room</a>
+    <a href="/dashboard">Live Dashboard</a>
+    <a href="/doctor-queue">Doctor Queue</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/activity-log">Activity Log</a>
+  </nav>
+</div>
+
+<main>
+  <h1>Staff Accounts</h1>
+  <p class="subtitle">Create and manage individual logins. New accounts must choose their own password the first time they sign in.</p>
+
+  <div class="grid grid-2">
+    <div class="panel">
+      <h2>Add Staff Account</h2>
+      <form id="createForm">
+        <label for="newDisplayName">Full Name</label>
+        <input type="text" id="newDisplayName" placeholder="e.g. Jane Smith" autocomplete="off" required />
+        <div style="height:14px"></div>
+        <label for="newUsername">Username</label>
+        <input type="text" id="newUsername" placeholder="e.g. jsmith" autocomplete="off" autocapitalize="none" spellcheck="false" required />
+        <div style="height:14px"></div>
+        <label for="newPassword">Temporary Password</label>
+        <input type="text" id="newPassword" placeholder="At least 10 characters, a letter and a number" autocomplete="off" required />
+        <div style="height:14px"></div>
+        <label class="checkbox-row">
+          <input type="checkbox" id="newIsAdmin" />
+          <span>Also give this person Admin access</span>
+        </label>
+        <div id="createError" class="edit-error"></div>
+        <button type="submit" class="btn btn-primary" style="width:100%;padding:13px">Create Account</button>
+      </form>
+    </div>
+
+    <div class="panel">
+      <h2>Existing Accounts</h2>
+      <div id="userList"></div>
+    </div>
+  </div>
+
+  <div style="height:20px"></div>
+
+  <div class="panel" style="padding:0;overflow:hidden">
+    <div style="padding:20px 20px 0"><h2>Security Log</h2>
+      <p class="subtitle" style="margin:-6px 0 12px;font-size:13px">Sign-ins, failed sign-ins, automatic logoffs, page views and account changes. Most recent first.</p>
+    </div>
+    <div style="overflow-x:auto">
+      <table class="security-table">
+        <thead><tr><th>Time</th><th>User</th><th>Event</th><th>Detail</th><th>Page</th></tr></thead>
+        <tbody id="securityRows"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+const EVENT_LABEL = {
+  login_success: 'Signed in',
+  login_failed: 'Failed sign-in',
+  login_blocked_locked: 'Sign-in blocked (locked out)',
+  logout: 'Signed out',
+  auto_logout_idle: 'Auto logoff (inactive)',
+  session_expired: 'Session expired',
+  page_view: 'Viewed page',
+  view_visit: 'Viewed visit record',
+  password_changed: 'Changed password',
+  admin_create_user: 'Created account',
+  admin_deactivate_user: 'Deactivated account',
+  admin_reactivate_user: 'Reactivated account',
+  admin_reset_password: 'Reset a password',
+  lockout_cleared: 'Lockout cleared',
+  login_blocked_network: 'Sign-in blocked (too many failures from this network)',
+};
+
+async function refresh() {
+  try {
+    const [users, events] = await Promise.all([getJSON('/api/users'), getJSON('/api/access-log?limit=200')]);
+    renderUsers(users);
+    renderEvents(events);
+  } catch (e) {
+    toast(e.message);
+  }
+}
+window.__refreshCurrentPage = refresh;
+
+let USERS = [];
+function renderUsers(users) {
+  USERS = users;
+  const el = document.getElementById('userList');
+  if (!users.length) { el.innerHTML = '<div class="empty-state">No accounts yet.</div>'; return; }
+  el.innerHTML = users.map((u) => `
+    <div style="padding:12px 0;border-bottom:1px solid var(--line)">
+      <div>
+        <strong>${escapeHtml(u.display_name)}</strong>
+        <span style="color:var(--ink-soft);font-size:13px"> · ${escapeHtml(u.username)}</span>
+        ${u.is_admin ? '<span class="pill pill-flag" style="margin-left:6px">Admin</span>' : ''}
+        ${!u.active ? '<span class="pill pill-neutral" style="margin-left:6px">Deactivated</span>' : ''}
+        ${u.active && u.must_change_password ? '<span class="pill pill-amber" style="margin-left:6px">Temp password</span>' : ''}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:8px;flex-wrap:wrap">
+        <button class="btn btn-secondary" style="padding:8px 12px;font-size:13px" onclick="toggleActive(${u.id})">${u.active ? 'Deactivate' : 'Reactivate'}</button>
+        <button class="btn btn-secondary" style="padding:8px 12px;font-size:13px" onclick="resetPassword(${u.id})">Reset Password</button>
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderEvents(events) {
+  const tbody = document.getElementById('securityRows');
+  if (!events.length) { tbody.innerHTML = '<tr><td colspan="5" class="empty-state">Nothing logged yet.</td></tr>'; return; }
+  tbody.innerHTML = events.map((e) => `
+    <tr style="${e.event === 'login_failed' || e.event === 'login_blocked_locked' ? 'background:var(--red-bg)' : ''}">
+      <td style="white-space:nowrap;color:var(--ink-soft);font-family:var(--mono);font-size:12px">${new Date(e.created_at).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })}</td>
+      <td>${escapeHtml(e.username || '—')}</td>
+      <td>${escapeHtml(EVENT_LABEL[e.event] || e.event)}</td>
+      <td style="color:var(--ink-soft)">${escapeHtml(e.detail || '')}</td>
+      <td style="color:var(--ink-soft)">${escapeHtml(e.path || '')}</td>
+    </tr>
+  `).join('');
+}
+
+document.getElementById('createForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('createError');
+  errorEl.textContent = '';
+  const displayName = document.getElementById('newDisplayName').value.trim();
+  try {
+    await postJSON('/api/users', {
+      displayName,
+      username: document.getElementById('newUsername').value.trim(),
+      password: document.getElementById('newPassword').value,
+      isAdmin: document.getElementById('newIsAdmin').checked,
+    });
+    e.target.reset();
+    toast(`Account created for ${displayName}`);
+    refresh();
+  } catch (err) {
+    errorEl.textContent = err.message;
+  }
+});
+
+async function toggleActive(id) {
+  try {
+    await postJSON(`/api/users/${id}/toggle-active`, {});
+    refresh();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+async function resetPassword(id) {
+  const user = USERS.find((x) => x.id === id);
+  const name = user ? user.display_name : 'this person';
+  const password = window.prompt(`New temporary password for ${name} (at least 10 characters, a letter and a number). They'll choose their own next time they sign in:`);
+  if (!password) return;
+  try {
+    await postJSON(`/api/users/${id}/reset-password`, { password });
+    toast('Password reset — they have been signed out everywhere');
+    refresh();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+initTopbar();
+loadThresholds();
+refresh();
+</script>
+</body>
+</html>

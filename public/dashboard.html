@@ -26,12 +26,13 @@
 <main>
   <h1>Live Practice Dashboard</h1>
   <p class="subtitle">All active patients, longest wait first. Only idle/waiting time counts — time with staff is excluded.</p>
+  <div id="brokenDownRooms"></div>
 
   <div class="panel">
     <table>
       <thead>
         <tr>
-          <th>Patient ID</th>
+          <th>Patient</th>
           <th>Operatory</th>
           <th>Waiting For</th>
           <th>Current Wait</th>
@@ -49,8 +50,9 @@
 <script src="/js/common.js"></script>
 <script>
 async function refresh() {
-  const res = await fetch('/api/visits/active');
-  const visits = await res.json();
+  const visits = await getJSON('/api/visits/active');
+  const rooms = await getJSON('/api/rooms');
+  document.getElementById('brokenDownRooms').innerHTML = brokenDownStripHtml(rooms);
   render(visits);
   updateWaitingBadge(visits);
 }
@@ -74,7 +76,7 @@ function render(visits) {
     const rowClass = isWaiting && level === 'red' ? 'row-red' : (isWaiting && level === 'amber' ? 'row-amber' : '');
     return `
       <tr class="${rowClass}">
-        <td><strong>${escapeHtml(v.patientId)}</strong></td>
+        <td><strong>${patientLabel(v)}</strong></td>
         <td>${escapeHtml(v.operatory || '—')}</td>
         <td>${isWaiting ? escapeHtml(WAITING_FOR_LABEL[v.waitingFor] || v.waitingFor) : '<span class="pill pill-neutral">With Staff</span>'}</td>
         <td><span class="timer timer-md timer-${level}">${isWaiting ? fmtDuration(v.currentWaitSeconds) : '—'}</span></td>
@@ -87,7 +89,7 @@ function render(visits) {
 }
 
 function escapeHtml(s) {
-  return String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 
 initTopbar();
