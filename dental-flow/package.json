@@ -1,0 +1,21 @@
+{
+  "name": "dental-flow",
+  "version": "1.0.0",
+  "description": "Patient idle/waiting time tracker for a dental practice. Tracks only gap timings between staff handoffs \u2014 no PHI.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "db:init": "node db/init.js",
+    "db:seed": "node db/seed.js",
+    "test": "node test/simulate.js && node test/auth.js && node test/phi.js && node test/security.js",
+    "create-admin": "node db/create-admin.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "pg": "^8.12.0",
+    "dotenv": "^16.4.5"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}

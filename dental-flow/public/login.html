@@ -1,0 +1,84 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sign In — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<main style="max-width:380px;margin:0 auto;padding-top:14vh">
+  <div style="text-align:center;margin-bottom:28px">
+    <div style="display:inline-flex;align-items:center;gap:10px;font-weight:800;font-size:22px;color:var(--ink);margin-bottom:6px">
+      <span style="width:12px;height:12px;border-radius:50%;background:var(--teal)"></span>
+      Dental Flow
+    </div>
+    <p class="subtitle" style="margin:0">Sign in to continue.</p>
+  </div>
+
+  <div id="notice" class="notice" style="display:none"></div>
+
+  <div class="panel">
+    <form id="loginForm">
+      <label for="username">Username</label>
+      <input type="text" id="username" autocomplete="username" autocapitalize="none" spellcheck="false" required />
+      <div style="height:14px"></div>
+      <label for="password">Password</label>
+      <input type="password" id="password" autocomplete="current-password" required />
+      <div style="height:16px"></div>
+      <div id="loginError" class="edit-error"></div>
+      <button type="submit" class="btn btn-primary" style="width:100%;padding:13px;font-size:15px">Sign In</button>
+    </form>
+  </div>
+  <p style="text-align:center;color:var(--ink-soft);font-size:12px;margin-top:16px">Forgot your password? Ask an admin to reset it.</p>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+const NOTICES = {
+  idle: 'You were signed out after a period of inactivity.',
+  expired: 'Your session expired. Please sign in again.',
+  'signed-out': 'Please sign in to continue.',
+};
+const reason = new URLSearchParams(window.location.search).get('reason');
+if (NOTICES[reason]) {
+  const el = document.getElementById('notice');
+  el.textContent = NOTICES[reason];
+  el.style.display = 'block';
+}
+
+document.getElementById('loginForm').addEventListener('submit', async (e) => {
+  e.preventDefault();
+  const errorEl = document.getElementById('loginError');
+  const button = e.target.querySelector('button');
+  errorEl.textContent = '';
+  button.disabled = true;
+  try {
+    const res = await fetch('/api/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'same-origin',
+      body: JSON.stringify({
+        username: document.getElementById('username').value,
+        password: document.getElementById('password').value,
+      }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) {
+      errorEl.textContent = data.error || 'Sign in failed';
+      document.getElementById('password').value = '';
+      return;
+    }
+    if (data.mustChangePassword) { window.location.href = '/change-password'; return; }
+    const station = getStation();
+    window.location.href = station ? stationHome(station) : '/station';
+  } catch (err) {
+    errorEl.textContent = 'Something went wrong — check your connection and try again';
+  } finally {
+    button.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

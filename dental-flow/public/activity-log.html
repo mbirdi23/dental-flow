@@ -1,0 +1,90 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Activity Log — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span>Dental Flow</div>
+  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong> <button id="stationLogout">Switch</button></div>
+  <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
+  <nav>
+    <a href="/">Front Desk</a>
+    <a href="/operatory">Operatories</a>
+    <a href="/tc-queue">TC Room</a>
+    <a href="/dashboard">Live Dashboard</a>
+    <a href="/doctor-queue">Doctor Queue</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/activity-log" class="active">Activity Log</a>
+  </nav>
+</div>
+
+<main>
+  <h1>Activity Log</h1>
+  <p class="subtitle">Every check-in, hand-off, and manual edit, with which station made it. Most recent first.</p>
+
+  <div class="panel" style="padding:0;overflow:hidden">
+    <table>
+      <thead>
+        <tr>
+          <th>Time</th>
+          <th>By</th>
+          <th>Station</th>
+          <th>Patient</th>
+          <th>Action</th>
+          <th>Details</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty-state" style="display:none">No activity yet.</div>
+  </div>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+async function refresh() {
+  const entries = await getJSON('/api/activity-log?limit=200');
+  render(entries);
+  getJSON('/api/visits/active').then(updateWaitingBadge).catch(() => {});
+}
+window.__refreshCurrentPage = refresh;
+
+function render(entries) {
+  const tbody = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+  if (!entries.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = entries.map(e => `
+    <tr style="${e.action === 'manual_edit' ? 'background:var(--amber-bg)' : ''}">
+      <td style="color:var(--ink-soft);font-family:var(--mono);font-size:12px;white-space:nowrap">${formatTime(e.created_at)}</td>
+      <td>${escapeHtml(e.performed_by || '—')}</td>
+      <td><span class="pill pill-neutral">${escapeHtml(e.station)}</span></td>
+      <td><strong>${escapeHtml(e.patient_id || (e.visit_id ? 'Visit ' + e.visit_id : '—'))}</strong></td>
+      <td>${escapeHtml(e.label)}</td>
+      <td style="color:var(--ink-soft)">${escapeHtml(e.details || '')}</td>
+    </tr>
+  `).join('');
+}
+
+function formatTime(iso) {
+  const d = new Date(iso);
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+}
+
+initTopbar();
+loadThresholds();
+connectRealtime(refresh);
+setInterval(refresh, 5000);
+</script>
+</body>
+</html>

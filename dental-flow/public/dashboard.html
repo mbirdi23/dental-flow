@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Live Dashboard — Dental Flow</title>
+<link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+
+<div class="topbar">
+  <div class="brand"><span class="dot"></span>Dental Flow</div>
+  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong> <button id="stationLogout">Switch</button></div>
+  <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
+  <nav>
+    <a href="/">Front Desk</a>
+    <a href="/operatory">Operatories</a>
+    <a href="/tc-queue">TC Room</a>
+    <a href="/dashboard" class="active">Live Dashboard</a>
+    <a href="/doctor-queue">Doctor Queue</a>
+    <a href="/analytics">Analytics</a>
+    <a href="/activity-log">Activity Log</a>
+  </nav>
+</div>
+
+<main>
+  <h1>Live Practice Dashboard</h1>
+  <p class="subtitle">All active patients, longest wait first. Only idle/waiting time counts — time with staff is excluded.</p>
+  <div id="brokenDownRooms"></div>
+
+  <div class="panel">
+    <table>
+      <thead>
+        <tr>
+          <th>Patient</th>
+          <th>Operatory</th>
+          <th>Waiting For</th>
+          <th>Current Wait</th>
+          <th>Total Idle Time</th>
+          <th>Flag</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div id="empty" class="empty-state" style="display:none">No active patients right now.</div>
+  </div>
+</main>
+
+<script src="/js/common.js"></script>
+<script>
+async function refresh() {
+  const visits = await getJSON('/api/visits/active');
+  const rooms = await getJSON('/api/rooms');
+  document.getElementById('brokenDownRooms').innerHTML = brokenDownStripHtml(rooms);
+  render(visits);
+  updateWaitingBadge(visits);
+}
+window.__refreshCurrentPage = refresh;
+
+function render(visits) {
+  const sorted = [...visits].sort((a, b) => b.currentWaitSeconds - a.currentWaitSeconds);
+  const tbody = document.getElementById('rows');
+  const empty = document.getElementById('empty');
+
+  if (!sorted.length) {
+    tbody.innerHTML = '';
+    empty.style.display = 'block';
+    return;
+  }
+  empty.style.display = 'none';
+
+  tbody.innerHTML = sorted.map(v => {
+    const isWaiting = !!v.waitingFor;
+    const level = isWaiting ? waitLevel(v.currentWaitSeconds) : 'green';
+    const rowClass = isWaiting && level === 'red' ? 'row-red' : (isWaiting && level === 'amber' ? 'row-amber' : '');
+    return `
+      <tr class="${rowClass}">
+        <td><strong>${patientLabel(v)}</strong></td>
+        <td>${escapeHtml(v.operatory || '—')}</td>
+        <td>${isWaiting ? escapeHtml(WAITING_FOR_LABEL[v.waitingFor] || v.waitingFor) : '<span class="pill pill-neutral">With Staff</span>'}</td>
+        <td><span class="timer timer-md timer-${level}">${isWaiting ? fmtDuration(v.currentWaitSeconds) : '—'}</span></td>
+        <td><span class="timer timer-sm" style="color:var(--ink-soft)">${fmtDuration(v.totalIdleSeconds)}</span></td>
+        <td>${flagButtonHtml(v.id, v.treatmentFlag)}</td>
+        <td>${editButtonHtml(v.id)}</td>
+      </tr>
+    `;
+  }).join('');
+}
+
+function escapeHtml(s) {
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+}
+
+initTopbar();
+loadThresholds();
+connectRealtime(refresh);
+setInterval(refresh, 1000);
+</script>
+</body>
+</html>
