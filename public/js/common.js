@@ -182,7 +182,11 @@ function applyStationNav(station) {
 // typing the URL directly, so it's redirected to its own room instead.
 // Returns true if a redirect happened, so the caller can stop early.
 function redirectOpStationAwayFromBoard() {
-  if (isOpStation(getStation())) {
+  // OP stations land on their own room by default. A room someone clicked on
+  // purpose (a room card on the Front Desk, which adds ?room=OP3) opens that
+  // room instead of bouncing back.
+  const pickedRoom = new URLSearchParams(window.location.search).get('room');
+  if (isOpStation(getStation()) && !OPERATORIES.includes(pickedRoom)) {
     window.location.replace('/my-room');
     return true;
   }
@@ -214,13 +218,16 @@ async function initTopbar() {
     el.innerHTML = `
       <strong id="userDisplayName"></strong>
       <span style="opacity:0.55">·</span>
-      <span id="stationName"></span>
+      <button id="stationName" type="button" title="Change which screen this is"></button>
       <button id="hideNamesBtn" class="names-only" type="button" title="Show only first initials on this screen"></button>
       <button id="fullLogout" type="button">Log Out</button>
     `;
   });
   const stationEl = document.getElementById('stationName');
-  if (stationEl) stationEl.textContent = station;
+  if (stationEl) {
+    stationEl.textContent = `${station} \u25BE`;
+    stationEl.addEventListener('click', logout); // goes to the station picker without signing out
+  }
   const switchBtn = document.getElementById('stationLogout');
   if (switchBtn) switchBtn.addEventListener('click', logout);
   const logoutBtn = document.getElementById('fullLogout');
