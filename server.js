@@ -2,7 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const path = require('path');
 const pool = require('./db/pool');
-const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, FULL_NEXT_ACTION, STATIONS, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS, STATUS_OPTIONS } = require('./lib/flow');
+const { TRANSITIONS, NEXT_ACTION, TC_NEXT_ACTION, FULL_NEXT_ACTION, SKIP_ACTION, STATIONS, STATUS_LABEL, ACTION_LABEL, GAP_FOR_STATUS, STATUS_OPTIONS } = require('./lib/flow');
 const { hashPassword, verifyPassword, generateSessionToken, hashToken, validatePassword, normalizeUsername, validateUsername, sessionState, lockoutRemainingMs, isPublicPath } = require('./lib/auth');
 const { cleanFirstName, logError } = require('./lib/phi');
 
@@ -23,6 +23,9 @@ const LOGIN_MAX_ATTEMPTS = 5;
 const LOGIN_LOCKOUT_MINUTES = 15;
 // The whole office usually shares one internet address, so this is generous.
 const LOGIN_MAX_FAILURES_PER_NETWORK = 30;
+// Visits still open this long after check-in were forgotten; they're closed
+// automatically and left out of wait-time stats.
+const AUTO_CLOSE_AFTER_HOURS = parseInt(process.env.AUTO_CLOSE_AFTER_HOURS || '12', 10);
 const NAME_RETENTION_HOURS = parseInt(process.env.NAME_RETENTION_HOURS || '24', 10);
 // Used so a sign-in attempt for a username that doesn't exist takes the
 // same time as a wrong password (doesn't reveal which usernames exist).
@@ -453,7 +456,7 @@ app.post('/api/visits', async (req, res) => {
     // without noticing the first). If they already have an active visit,
     // point staff at editing that one instead of creating a duplicate.
     const { rows: existingRows } = !patientId ? { rows: [] } : await pool.query(
-      `SELECT id, status FROM visits WHERE patient_id = $1 AND status NOT IN ('completed', 'cancelled') LIMIT 1`,
+      `SELECT id, status FROM visits WHERE patient_id = $1 AND status NOT IN ('completed', 'cancelled', 'auto_closed') LIMIT 1`,
       [patientId]
     );
     if (existingRows[0]) {
@@ -615,7 +618,7 @@ app.post('/api/visits/:id/transition', async (req, res) => {
 // activity_log entry so it's clear who changed what.
 app.post('/api/visits/:id/override', async (req, res) => {
   const visitId = parseInt(req.params.id, 10);
-  const { patientId, status, operatory, treatmentFlag, firstName, role } = req.body;
+  let { patientId, status, operatory, treatmentFlag, firstName, role } = req.body;
 
   const client = await pool.connect();
   try {
@@ -626,6 +629,24 @@ app.post('/api/visits/:id/override', async (req, res) => {
     if (!visit) {
       await client.query('ROLLBACK');
       return res.status(404).json({ error: 'Visit not found' });
+    }
+
+    // Putting a patient who hasn't been pulled back yet into a room from the
+    // edit panel means they've been pulled back: move them to "Pulled Back" so
+    // the waiting clock stops, the room's screen shows them, and the room is
+    // taken -- exactly what the Front Desk room buttons do.
+    const PRE_ROOM_STATUSES = ['arrived', 'doing_paperwork', 'waiting_assistant'];
+    const targetOp = operatory !== undefined ? (operatory || null) : visit.operatory;
+    if (operatory !== undefined && targetOp && targetOp !== visit.operatory
+        && PRE_ROOM_STATUSES.includes(status !== undefined ? status : visit.status)) {
+      status = 'with_assistant';
+    }
+    if (status !== undefined && status !== visit.status && IN_ROOM_STATUSES.includes(status) && !targetOp) {
+      await client.query('ROLLBACK');
+      return res.status(400).json({ error: 'Pick a room for this patient first' });
+    }
+    if (targetOp && targetOp !== visit.operatory && IN_ROOM_STATUSES.includes(status !== undefined ? status : visit.status)) {
+      await client.query(`UPDATE rooms SET cleaning_since = NULL WHERE operatory = $1`, [targetOp]);
     }
 
     const changes = [];
@@ -641,7 +662,7 @@ app.post('/api/visits/:id/override', async (req, res) => {
         return res.status(400).json({ error: 'Patient ID is too long (max 40 characters)' });
       }
       const { rows: dupeRows } = !cleanId ? { rows: [] } : await client.query(
-        `SELECT id FROM visits WHERE id != $1 AND patient_id = $2 AND status NOT IN ('completed', 'cancelled') LIMIT 1`,
+        `SELECT id FROM visits WHERE id != $1 AND patient_id = $2 AND status NOT IN ('completed', 'cancelled', 'auto_closed') LIMIT 1`,
         [visitId, cleanId]
       );
       if (dupeRows[0]) {
@@ -821,7 +842,7 @@ async function fetchActiveVisits() {
     ) closed ON closed.visit_id = v.id
     LEFT JOIN gap_events open
       ON open.visit_id = v.id AND open.ended_at IS NULL
-    WHERE v.status NOT IN ('completed', 'cancelled')
+    WHERE v.status NOT IN ('completed', 'cancelled', 'auto_closed')
     ORDER BY v.started_at ASC
   `);
 
@@ -845,6 +866,7 @@ async function fetchActiveVisits() {
       nextAction: NEXT_ACTION[r.status] || null,
       tcNextAction: TC_NEXT_ACTION[r.status] || null,
       fullNextAction: FULL_NEXT_ACTION[r.status] || null,
+      skipAction: SKIP_ACTION[r.status] || null,
     };
   });
 }
@@ -968,7 +990,7 @@ app.get('/api/analytics', async (req, res) => {
         `SELECT ge.gap_number, AVG(ge.duration_seconds)::numeric(10,1) AS avg_seconds, COUNT(*) AS n
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
-         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status != 'cancelled'
+         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status NOT IN ('cancelled', 'auto_closed')
          GROUP BY ge.gap_number ORDER BY ge.gap_number`,
         [start, end]
       ),
@@ -982,7 +1004,7 @@ app.get('/api/analytics', async (req, res) => {
            SELECT ge.visit_id, SUM(ge.duration_seconds) AS total
            FROM gap_events ge
            JOIN visits v ON v.id = ge.visit_id
-           WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.status != 'cancelled'
+           WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.status NOT IN ('cancelled', 'auto_closed')
            GROUP BY ge.visit_id
          ) t`,
         [start, end]
@@ -992,7 +1014,7 @@ app.get('/api/analytics', async (req, res) => {
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
          WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2
-           AND v.status != 'cancelled' AND ge.duration_seconds > 600`,
+           AND v.status NOT IN ('cancelled', 'auto_closed') AND ge.duration_seconds > 600`,
         [start, end]
       ),
       pool.query(
@@ -1000,7 +1022,7 @@ app.get('/api/analytics', async (req, res) => {
         [start, end]
       ),
       pool.query(
-        `SELECT COUNT(*) AS n FROM visits WHERE started_at BETWEEN $1 AND $2 AND status != 'cancelled'`,
+        `SELECT COUNT(*) AS n FROM visits WHERE started_at BETWEEN $1 AND $2 AND status NOT IN ('cancelled', 'auto_closed')`,
         [start, end]
       ),
       pool.query(
@@ -1011,7 +1033,7 @@ app.get('/api/analytics', async (req, res) => {
         `SELECT ge.visit_id, v.patient_id, v.operatory, ge.gap_number, ge.waiting_for, ge.duration_seconds
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
-         WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.status != 'cancelled'
+         WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.status NOT IN ('cancelled', 'auto_closed')
          ORDER BY ge.duration_seconds DESC LIMIT 1`,
         [start, end]
       ),
@@ -1019,7 +1041,7 @@ app.get('/api/analytics', async (req, res) => {
         `SELECT EXTRACT(DOW FROM ge.started_at)::int AS dow, AVG(ge.duration_seconds)::numeric(10,1) AS avg_seconds
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
-         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status != 'cancelled'
+         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status NOT IN ('cancelled', 'auto_closed')
          GROUP BY dow ORDER BY dow`,
         [start, end]
       ),
@@ -1027,7 +1049,7 @@ app.get('/api/analytics', async (req, res) => {
         `SELECT EXTRACT(HOUR FROM ge.started_at)::int AS hour, AVG(ge.duration_seconds)::numeric(10,1) AS avg_seconds
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
-         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status != 'cancelled'
+         WHERE ge.ended_at IS NOT NULL AND ge.started_at BETWEEN $1 AND $2 AND v.status NOT IN ('cancelled', 'auto_closed')
          GROUP BY hour ORDER BY hour`,
         [start, end]
       ),
@@ -1035,7 +1057,7 @@ app.get('/api/analytics', async (req, res) => {
         `SELECT v.operatory, AVG(ge.duration_seconds)::numeric(10,1) AS avg_seconds
          FROM gap_events ge
          JOIN visits v ON v.id = ge.visit_id
-         WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.operatory IS NOT NULL AND v.status != 'cancelled'
+         WHERE ge.ended_at IS NOT NULL AND v.started_at BETWEEN $1 AND $2 AND v.operatory IS NOT NULL AND v.status NOT IN ('cancelled', 'auto_closed')
          GROUP BY v.operatory ORDER BY v.operatory`,
         [start, end]
       ),
@@ -1048,6 +1070,11 @@ app.get('/api/analytics', async (req, res) => {
     const visitsOver10 = parseInt(byGapOver10.rows[0]?.n || '0', 10);
     const allVisits = parseInt(allVisitsCount.rows[0]?.n || '0', 10);
     const cancelled = parseInt(cancelledCount.rows[0]?.n || '0', 10);
+    const { rows: autoRows } = await pool.query(
+      `SELECT COUNT(*) AS n FROM visits WHERE started_at BETWEEN $1 AND $2 AND status = 'auto_closed'`,
+      [start, end]
+    );
+    const autoClosed = parseInt(autoRows[0]?.n || '0', 10);
 
     res.json({
       range: { start, end },
@@ -1066,6 +1093,7 @@ app.get('/api/analytics', async (req, res) => {
       // in its own right, kept separate from the wait-time stats above.
       allVisitsStarted: allVisits,
       cancelledVisits: cancelled,
+      autoClosedVisits: autoClosed,
       cancelledRate: allVisits > 0 ? Number(((cancelled / allVisits) * 100).toFixed(1)) : 0,
       worstGap: worstGap.rows[0] || null,
       averageByDayOfWeek: byDow.rows,
@@ -1102,7 +1130,7 @@ app.get('/api/analytics/trend', async (req, res) => {
         SELECT v.id AS visit_id, v.started_at, SUM(ge.duration_seconds) AS total_seconds
         FROM visits v
         JOIN gap_events ge ON ge.visit_id = v.id AND ge.ended_at IS NOT NULL
-        WHERE v.status != 'cancelled'
+        WHERE v.status NOT IN ('cancelled', 'auto_closed')
         GROUP BY v.id, v.started_at
       )
       SELECT
@@ -1185,17 +1213,59 @@ app.use((err, req, res, next) => {
   res.status(status).send(message);
 });
 
+// End-of-day close-out: a visit nobody completed (forgotten Complete tap)
+// is closed AUTO_CLOSE_AFTER_HOURS after check-in, marked auto_closed, and
+// left out of every wait-time statistic so a runaway timer can't skew them.
+async function autoCloseForgottenVisits() {
+  const client = await pool.connect();
+  try {
+    await client.query('BEGIN');
+    const { rows } = await client.query(
+      `SELECT id, patient_id FROM visits
+       WHERE status NOT IN ('completed', 'cancelled', 'auto_closed')
+         AND started_at < now() - ($1::int * interval '1 hours')
+       FOR UPDATE`,
+      [AUTO_CLOSE_AFTER_HOURS]
+    );
+    for (const v of rows) {
+      await client.query(
+        `UPDATE gap_events SET ended_at = now(), duration_seconds = EXTRACT(EPOCH FROM (now() - started_at))::int, ended_by_role = 'System'
+         WHERE visit_id = $1 AND ended_at IS NULL`,
+        [v.id]
+      );
+      await client.query(`UPDATE visits SET status = 'auto_closed', completed_at = now() WHERE id = $1`, [v.id]);
+      await client.query(`INSERT INTO status_events (visit_id, status) VALUES ($1, 'auto_closed')`, [v.id]);
+      await client.query(
+        `INSERT INTO activity_log (visit_id, patient_id, station, action, label, details, performed_by)
+         VALUES ($1, $2, 'System', 'auto_close', 'Auto-Closed', $3, 'Automatic close-out')`,
+        [v.id, v.patient_id, `Not completed within ${AUTO_CLOSE_AFTER_HOURS} hours; left out of wait-time stats`]
+      );
+    }
+    await client.query('COMMIT');
+    if (rows.length) {
+      console.log(`[auto-close] Closed ${rows.length} forgotten visit(s).`);
+      broadcast('visits-changed', { reason: 'auto_close' });
+    }
+  } catch (err) {
+    await client.query('ROLLBACK').catch(() => {});
+    logError('auto-close', err);
+  } finally {
+    client.release();
+  }
+}
+
 // Minimum-necessary data: first names are only needed while the patient is
 // in the building, so they're cleared from finished visits after
 // NAME_RETENTION_HOURS (and from any visit older than 3 days, in case one
 // was never closed out). Wait-time analytics are unaffected.
 async function runHousekeeping() {
+  await autoCloseForgottenVisits();
   try {
     const { rowCount } = await pool.query(
       `UPDATE visits SET patient_first_name = NULL
        WHERE patient_first_name IS NOT NULL
          AND (
-           (status IN ('completed', 'cancelled') AND COALESCE(completed_at, started_at) < now() - ($1::int * interval '1 hours'))
+           (status IN ('completed', 'cancelled', 'auto_closed') AND COALESCE(completed_at, started_at) < now() - ($1::int * interval '1 hours'))
            OR started_at < now() - interval '3 days'
          )`,
       [NAME_RETENTION_HOURS]

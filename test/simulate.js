@@ -108,6 +108,14 @@ function transition(db, visitId, action, extra = {}) {
 function override(db, visitId, updates, role) {
   const visit = db.visits.get(visitId);
   if (!visit) throw new Error('Visit not found');
+  const targetOp = updates.operatory !== undefined ? (updates.operatory || null) : visit.operatory;
+  if (updates.operatory !== undefined && targetOp && targetOp !== visit.operatory
+      && ['arrived', 'doing_paperwork', 'waiting_assistant'].includes(updates.status !== undefined ? updates.status : visit.status)) {
+    updates = { ...updates, status: 'with_assistant' };
+  }
+  if (updates.status !== undefined && updates.status !== visit.status && IN_ROOM.includes(updates.status) && !targetOp) {
+    throw new Error('Pick a room for this patient first');
+  }
   const changes = [];
   let flagChanged = false;
 
@@ -603,6 +611,60 @@ console.log('\n14. Room turnover: a room stays taken until the visit is complete
   test('once the visit is completed, the next patient can be seated in OP2', () => {
     transition(db, a.id, 'complete', { role: 'OP2' });
     assert.doesNotThrow(() => transition(db, b.id, 'assign_operatory', { operatory: 'OP2', role: 'Upfront' }));
+  });
+}
+
+console.log('\n15. Putting a waiting patient into a room from the edit panel pulls them back\n');
+{
+  const db = freshDb();
+  const v = checkInAndReachWaitingRoom(db, '15001', 'Upfront');
+  advance(120);
+  override(db, v.id, { status: 'waiting_assistant', operatory: 'OP3' }, 'Lab');
+
+  test('status becomes Pulled Back and the waiting clock stops at the right time', () => {
+    assert.strictEqual(v.status, 'with_assistant');
+    assert.strictEqual(findOpenGap(db, v.id), null);
+    const gap1 = [...db.gapEvents.values()].find((g) => g.visitId === v.id && g.gapNumber === 1);
+    assert.strictEqual(gap1.durationSeconds, 120);
+  });
+  test('the room now counts as taken', () => {
+    assert.strictEqual(isOperatoryOccupied(db, 999, 'OP3'), true);
+  });
+  test('setting an in-the-chair status with no room is refused', () => {
+    const w = checkInAndReachWaitingRoom(db, '15002', 'Upfront');
+    assert.throws(() => override(db, w.id, { status: 'with_hygiene', operatory: '' }, 'Lab'), /Pick a room/);
+  });
+}
+
+console.log('\n16. Skipping a stage that doesn\u2019t happen records no fake wait\n');
+{
+  const { SKIP_ACTION } = require('../lib/flow');
+  const db = freshDb();
+  const v = checkInAndReachWaitingRoom(db, '16001', 'Upfront');
+  transition(db, v.id, 'assign_operatory', { operatory: 'OP1', role: 'Upfront' });
+
+  test('assistant can skip hygiene straight to waiting for the doctor', () => {
+    assert.strictEqual(SKIP_ACTION.with_assistant.action, 'skip_hygiene');
+    transition(db, v.id, 'skip_hygiene', { role: 'OP1' });
+    assert.strictEqual(v.status, 'waiting_doctor');
+    assert.strictEqual([...db.gapEvents.values()].filter((g) => g.visitId === v.id && g.gapNumber === 2).length, 0);
+  });
+  test('if the patient was already waiting, that real wait is kept when the stage is skipped', () => {
+    advance(200);
+    transition(db, v.id, 'skip_doctor', { role: 'OP1' });
+    const gap3 = [...db.gapEvents.values()].find((g) => g.visitId === v.id && g.gapNumber === 3);
+    assert.strictEqual(gap3.durationSeconds, 200);
+    assert.strictEqual(v.status, 'waiting_tc');
+  });
+  test('skipping the TC completes the visit and frees the room', () => {
+    transition(db, v.id, 'skip_tc', { role: 'OP1' });
+    assert.strictEqual(v.status, 'completed');
+    assert.strictEqual(findOpenGap(db, v.id), null);
+    assert.strictEqual(isOperatoryOccupied(db, 999, 'OP1'), false);
+  });
+  test('skip is refused from a stage it doesn\u2019t apply to', () => {
+    const w = checkInAndReachWaitingRoom(db, '16002', 'Upfront');
+    assert.throws(() => transition(db, w.id, 'skip_doctor', { role: 'Upfront' }), /not valid/);
   });
 }
 

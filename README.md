@@ -224,6 +224,19 @@ own — HIPAA compliance also depends on the hosting agreement and the
 practice's own policies. Have whoever handles your HIPAA compliance review
 the setup before going live.
 
+### Skipping a stage, and forgotten visits
+
+- **Skip:** when a stage doesn't happen (no hygiene, no doctor, or no TC),
+  the room screen shows a smaller "No hygiene: send to Doctor" style button
+  under the main one. A skipped stage records no wait at all, so it never
+  drags the averages down. If the patient had already been waiting for that
+  person, that real wait is kept.
+- **Auto-close:** any visit still open `AUTO_CLOSE_AFTER_HOURS` after check-in
+  (default 12) is closed automatically, frees its room, shows as
+  **Auto-Closed** in the Activity Log, and is left out of every wait-time
+  statistic. Analytics shows how many visits were auto-closed, which tells
+  you how often Complete is being forgotten.
+
 ## 4. Where data is stored
 
 Everything lives in the PostgreSQL database you point `DATABASE_URL` (or

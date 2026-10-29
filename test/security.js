@@ -95,7 +95,7 @@ test('no database query is built by pasting in values (SQL injection)', () => {
   }
 });
 test('no patient or staff text is placed inside inline click handlers (cross-site scripting)', () => {
-  const allowedInQuotes = new Set(['op', 'next.action', 'v.tcNextAction.action']);
+  const allowedInQuotes = new Set(['op', 'next.action', 'skip.action', 'v.tcNextAction.action']);
   for (const [file, src] of publicFiles) {
     for (const [handler] of src.matchAll(/\bon[a-z]+="[^"]*"/g)) {
       for (const [, expr] of handler.matchAll(/'\$\{([^}]*)\}'/g)) {

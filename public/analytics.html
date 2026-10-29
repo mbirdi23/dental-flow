@@ -10,7 +10,7 @@
 
 <div class="topbar">
   <div class="brand"><span class="dot"></span>Dental Flow</div>
-  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong> <button id="stationLogout">Switch</button></div>
+  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong></div>
   <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
   <nav>
     <a href="/">Front Desk</a>
@@ -43,7 +43,7 @@
   <div class="grid grid-4" id="statCards"></div>
 
   <div style="height:12px"></div>
-  <div class="grid grid-3" id="cancelStats"></div>
+  <div class="grid grid-4" id="cancelStats"></div>
 
   <div style="height:20px"></div>
 
@@ -128,6 +128,7 @@ function render(data) {
     <div class="stat-card"><div class="label">Visits Started</div><div class="value">${data.allVisitsStarted}</div></div>
     <div class="stat-card"><div class="label">Cancelled / No-Show</div><div class="value">${data.cancelledVisits}</div></div>
     <div class="stat-card"><div class="label">Cancellation Rate</div><div class="value">${data.cancelledRate}%</div></div>
+    <div class="stat-card"><div class="label">Auto-Closed (Never Completed)</div><div class="value">${data.autoClosedVisits || 0}</div></div>
   `;
 
   document.getElementById('byGapRows').innerHTML = [1,2,3,4].map(n => {

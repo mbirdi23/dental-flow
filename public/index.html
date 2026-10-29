@@ -6,11 +6,11 @@
 <title>Front Desk — Dental Flow</title>
 <link rel="stylesheet" href="/css/style.css" />
 </head>
-<body>
+<body class="page-frontdesk">
 
 <div class="topbar">
   <div class="brand"><span class="dot"></span>Dental Flow</div>
-  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong> <button id="stationLogout">Switch</button></div>
+  <div class="station-pill"><span>Station:</span> <strong id="stationName">—</strong></div>
   <div id="waitingBadge" class="waiting-badge"><span class="count"></span><span class="label"></span></div>
   <nav>
     <a href="/" class="active">Front Desk</a>
@@ -24,45 +24,41 @@
 </div>
 
 <main>
-  <h1>Front Desk</h1>
-  <p class="subtitle">Check patients in, help with paperwork, send them to the waiting room, and complete visits once TC is done.</p>
-
-  <div class="grid grid-2">
-    <div class="panel">
+  <div class="panel fd-section checkin-panel">
+    <form id="checkinForm" class="checkin-row">
       <h2>Check In</h2>
-      <form id="checkinForm">
-        <div class="names-only">
-          <label for="firstName">First Name</label>
-          <input type="text" id="firstName" placeholder="e.g. Sarah" autocomplete="off" maxlength="40" />
-          <div style="height:14px"></div>
-        </div>
-        <label for="patientId">Patient ID (optional)</label>
-        <input type="text" id="patientId" placeholder="e.g. 8472" autocomplete="off" maxlength="40" />
-        <div style="height:14px"></div>
-        <button type="submit" class="btn btn-primary btn-huge">Check In</button>
-      </form>
-    </div>
-
-    <div class="panel">
-      <h2>Doing Paperwork</h2>
-      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Attended — no timer runs here. Send to the waiting room once they're done.</p>
-      <div id="paperworkList"></div>
-    </div>
+      <input type="text" id="firstName" placeholder="First name" aria-label="First name" autocomplete="off" maxlength="40" />
+      <input type="text" id="patientId" placeholder="Patient ID (optional)" aria-label="Patient ID (optional)" autocomplete="off" maxlength="40" />
+      <button type="submit" class="btn btn-primary checkin-btn">Check In</button>
+    </form>
   </div>
 
-  <div style="height:20px"></div>
-
-  <div class="grid grid-2">
-    <div class="panel">
-      <h2>Waiting Room</h2>
-      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Waiting for an assistant or hygienist to pull them back. 🧽 means the room is still being broken down.</p>
-      <div id="waitingAssistantList"></div>
+  <div class="fd-grid">
+    <div>
+      <div class="panel fd-section">
+        <h2>Doing Paperwork</h2>
+        <div id="paperworkList"></div>
+      </div>
+      <div class="panel fd-section">
+        <h2>Waiting Room</h2>
+        <div id="waitingAssistantList"></div>
+      </div>
     </div>
-
-    <div class="panel">
-      <h2>Ready to Complete</h2>
-      <p style="font-size:12px;color:var(--ink-soft);margin:-6px 0 14px">Treatment coordinator is done — wrap up and complete the visit.</p>
-      <div id="readyToCompleteList"></div>
+    <div>
+      <div class="panel fd-section">
+        <h2>Rooms</h2>
+        <div id="roomsOverview" class="rooms-overview"></div>
+      </div>
+      <div class="fd-pair">
+        <div class="panel fd-section">
+          <h2><a class="panel-link" href="/tc-queue" title="Open TC Room">TC Queue →</a></h2>
+          <div id="tcQueueList"></div>
+        </div>
+        <div class="panel fd-section">
+          <h2>Ready to Complete</h2>
+          <div id="readyToCompleteList"></div>
+        </div>
+      </div>
     </div>
   </div>
 </main>
@@ -77,66 +73,103 @@ async function refresh() {
   renderPaperwork(visits.filter(v => v.status === 'doing_paperwork'));
   renderWaitingAssistant(visits.filter(v => v.status === 'waiting_assistant'), occupiedOps, rooms);
   renderReadyToComplete(visits.filter(v => v.status === 'with_tc'));
+  renderRoomsOverview(visits, rooms);
+  renderTcQueue(visits);
   updateWaitingBadge(visits);
 }
 window.__refreshCurrentPage = refresh;
 
-function renderPaperwork(visits) {
-  const el = document.getElementById('paperworkList');
-  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one doing paperwork.</div>'; return; }
-  el.innerHTML = visits.map(v => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">
-      <div style="display:flex;align-items:center;gap:6px">
+// All six rooms at a glance: who's in each one and what stage they're at.
+function renderRoomsOverview(visits, rooms) {
+  // Each card is a link to that room's screen.
+  document.getElementById('roomsOverview').innerHTML = OPERATORIES.map((op) => {
+    const href = `/operatory?room=${encodeURIComponent(op)}`;
+    const v = visits.find((x) => x.operatory === op && x.inRoom);
+    if (v) {
+      const level = v.waitingFor ? waitLevel(v.currentWaitSeconds) : null;
+      return `<a class="room-card room-card-link" href="${href}" title="Open ${op}">
+        <div class="room-card-op">${op}</div>
+        <div class="room-card-name">${patientLabel(v)}</div>
+        <span class="pill ${level ? 'pill-' + level : 'pill-neutral'}">${escapeHtml(STATUS_LABEL[v.status] || v.status)}</span>
+        ${level ? `<span class="timer timer-sm timer-${level}">${fmtDuration(v.currentWaitSeconds)}</span>` : ''}
+        ${v.treatmentFlag ? treatmentBadgeHtml(true) : ''}
+      </a>`;
+    }
+    const room = cleaningFor(rooms, op);
+    if (room) {
+      const mins = Math.max(0, Math.floor((Date.now() - new Date(room.cleaningSince).getTime()) / 60000));
+      return `<a class="room-card room-card-link room-card-cleaning" href="${href}" title="Open ${op}"><div class="room-card-op">${op}</div><div>🧽 Being broken down, ${mins < 1 ? 'just started' : mins + ' min'}</div></a>`;
+    }
+    return `<a class="room-card room-card-link room-card-empty" href="${href}" title="Open ${op}"><div class="room-card-op">${op}</div><div>Empty</div></a>`;
+  }).join('');
+}
+
+// TC Queue: who is with the treatment coordinator (first) and who is waiting.
+// Clicking a TC Queue row opens the TC Room screen (the pencil still edits).
+function openTcRoom(event) {
+  if (event && event.target.closest('button, a')) return;
+  window.location.href = '/tc-queue';
+}
+
+function renderTcQueue(visits) {
+  const el = document.getElementById('tcQueueList');
+  const tc = visits
+    .filter((v) => v.status === 'waiting_tc' || v.status === 'with_tc')
+    .sort((a, b) => (b.status === 'with_tc') - (a.status === 'with_tc') || b.currentWaitSeconds - a.currentWaitSeconds);
+  if (!tc.length) { el.innerHTML = '<div class="empty-state">No one is with or waiting for the treatment coordinator.</div>'; return; }
+  el.innerHTML = tc.map((v) => {
+    const waiting = v.status === 'waiting_tc';
+    const level = waiting ? waitLevel(v.currentWaitSeconds) : null;
+    return `<div class="fd-row fd-row-link" onclick="openTcRoom(event)" title="Open TC Room">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
         <strong>${patientLabel(v)}</strong>
         ${editButtonHtml(v.id)}
         ${treatmentBadgeHtml(v.treatmentFlag)}
+        <span class="room-card-from">from ${escapeHtml(v.operatory || '—')}</span>
       </div>
-      <button class="btn btn-primary" onclick="doTransition(${v.id}, 'ready_for_assistant')">Done — Send to Waiting Room</button>
-    </div>
-  `).join('');
+      <div style="display:flex;align-items:center;gap:10px">
+        <span class="pill ${level ? 'pill-' + level : 'pill-neutral'}">${waiting ? 'Waiting' : 'With TC'}</span>
+        ${level ? `<span class="timer timer-sm timer-${level}">${fmtDuration(v.currentWaitSeconds)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function renderPaperwork(visits) {
+  const el = document.getElementById('paperworkList');
+  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one is doing paperwork.</div>'; return; }
+  el.innerHTML = visits.map(v => `
+    <div class="fd-row">
+      <div class="wr-who"><strong>${patientLabel(v)}</strong>${editButtonHtml(v.id)}${treatmentBadgeHtml(v.treatmentFlag)}</div>
+      <button class="btn btn-primary btn-xs" onclick="doTransition(${v.id}, 'ready_for_assistant')">Send to Waiting Room</button>
+    </div>`).join('');
 }
 
 function renderWaitingAssistant(visits, occupiedOps, rooms = []) {
   const el = document.getElementById('waitingAssistantList');
-  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one waiting.</div>'; return; }
+  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one is waiting.</div>'; return; }
   const sorted = [...visits].sort((a, b) => b.currentWaitSeconds - a.currentWaitSeconds);
   el.innerHTML = sorted.map(v => `
-    <div style="padding:12px 0;border-bottom:1px solid var(--line)">
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
-        <div style="display:flex;align-items:center;gap:6px">
-          <strong>${patientLabel(v)}</strong>
-          ${editButtonHtml(v.id)}
-          ${treatmentBadgeHtml(v.treatmentFlag)}
-        </div>
-        <span class="timer timer-sm timer-${waitLevel(v.currentWaitSeconds)}">${fmtDuration(v.currentWaitSeconds)}</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:8px">
-        ${OPERATORIES.map(op => {
-          const occupiedBy = occupiedOps.get(op);
-          return `<button class="btn btn-secondary" ${occupiedBy ? 'disabled title="Occupied by patient ' + escapeHtml(occupiedBy) + '"' : ''} data-visit="${v.id}" data-op="${op}" onclick="assignOperatory(${v.id}, '${op}')" style="${occupiedBy ? 'opacity:.4;cursor:not-allowed' : ''}">${op}${occupiedBy ? ' •' : (cleaningFor(rooms, op) ? ' 🧽' : '')}</button>`;
-        }).join('')}
-      </div>
-      <div style="text-align:right">${cancelButtonHtml(v.id, v.patientId)}</div>
-    </div>
-  `).join('');
+    <div class="wr-row">
+      <div class="wr-who"><strong>${patientLabel(v)}</strong>${editButtonHtml(v.id)}${treatmentBadgeHtml(v.treatmentFlag)}</div>
+      <span class="timer timer-sm timer-${waitLevel(v.currentWaitSeconds)}">${fmtDuration(v.currentWaitSeconds)}</span>
+      <div class="op-mini">${OPERATORIES.map(op => {
+        const occupiedBy = occupiedOps.get(op);
+        const cleaning = !occupiedBy && cleaningFor(rooms, op);
+        return `<button class="btn btn-secondary btn-xs" ${occupiedBy ? 'disabled' : ''} title="${occupiedBy ? 'Someone is already in this room' : cleaning ? 'Being broken down' : 'Send to ' + op}" onclick="assignOperatory(${v.id}, '${op}')">${op}${occupiedBy ? ' •' : cleaning ? ' 🧽' : ''}</button>`;
+      }).join('')}</div>
+      ${cancelButtonHtml(v.id)}
+    </div>`).join('');
 }
 
 function renderReadyToComplete(visits) {
   const el = document.getElementById('readyToCompleteList');
-  if (!visits.length) { el.innerHTML = '<div class="empty-state">Nobody ready to complete.</div>'; return; }
+  if (!visits.length) { el.innerHTML = '<div class="empty-state">No one is ready to complete.</div>'; return; }
   el.innerHTML = visits.map(v => `
-    <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid var(--line)">
-      <div>
-        <div style="display:flex;align-items:center;gap:6px">
-          <strong>${patientLabel(v)}</strong>
-          ${editButtonHtml(v.id)}
-          ${treatmentBadgeHtml(v.treatmentFlag)}
-        </div>
-        <div style="color:var(--ink-soft);font-size:13px">${escapeHtml(v.operatory || '')}</div>
-      </div>
-      <button class="btn btn-primary" onclick="doTransition(${v.id}, 'complete')">Complete Visit</button>
-    </div>
-  `).join('');
+    <div class="fd-row">
+      <div class="wr-who"><strong>${patientLabel(v)}</strong>${editButtonHtml(v.id)}${treatmentBadgeHtml(v.treatmentFlag)}<span class="room-card-from">${escapeHtml(v.operatory || '')}</span></div>
+      <button class="btn btn-primary btn-xs" onclick="doTransition(${v.id}, 'complete')">Complete Visit</button>
+    </div>`).join('');
 }
 
 async function assignOperatory(visitId, operatory) {

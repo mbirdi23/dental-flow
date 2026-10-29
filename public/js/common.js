@@ -53,6 +53,7 @@ const STATUS_LABEL = {
   with_checkout: 'With Checkout (retired)',
   completed: 'Completed',
   cancelled: 'Cancelled / No-Show',
+  auto_closed: 'Auto-Closed',
 };
 
 // The manual-edit status dropdown only ever offers these — the retired
@@ -80,6 +81,10 @@ const ACTION_LABEL = {
   manual_edit: 'Manual Edit',
   cancel_visit: 'Cancelled / No-Show',
   toggle_flag: 'Treatment Flag Changed',
+  skip_hygiene: 'Skipped Hygiene',
+  skip_doctor: 'Skipped Doctor',
+  skip_tc: 'Skipped TC (Completed)',
+  auto_close: 'Auto-Closed',
 };
 
 function escapeHtml(s) {
@@ -210,7 +215,6 @@ async function initTopbar() {
       <strong id="userDisplayName"></strong>
       <span style="opacity:0.55">·</span>
       <span id="stationName"></span>
-      <button id="stationLogout" type="button" title="Use this screen as a different station">Switch</button>
       <button id="hideNamesBtn" class="names-only" type="button" title="Show only first initials on this screen"></button>
       <button id="fullLogout" type="button">Log Out</button>
     `;
@@ -418,6 +422,8 @@ function stationHome(s) {
 
 async function fullLogout() {
   try { await fetch('/api/logout', { method: 'POST', credentials: 'same-origin' }); } catch (e) {}
+  // Logging out also clears the station, so the next sign-in picks a screen.
+  try { localStorage.removeItem(STATION_KEY); } catch (e) {}
   window.location.href = '/login';
 }
 
@@ -559,6 +565,8 @@ function roomPatientHtml(visit, big) {
   const isWaiting = !!visit.waitingFor;
   const level = isWaiting ? waitLevel(visit.currentWaitSeconds) : 'green';
   const next = visit.fullNextAction;
+  const skip = visit.skipAction;
+  const skipBtn = skip ? `<button class="btn btn-secondary skip-btn" onclick="roomAct(${visit.id}, '${skip.action}')">${skip.label}</button>` : '';
   const size = big ? 'timer-lg' : 'timer-md';
   return `
     <div class="panel" style="margin-bottom:16px">
@@ -580,10 +588,11 @@ function roomPatientHtml(visit, big) {
           <div class="timer ${size}" style="color:var(--ink)">${fmtDuration(visit.totalIdleSeconds)}</div>
         </div>
       </div>
-      ${big ? '' : (next ? `<button class="btn btn-primary" style="width:100%;padding:14px" onclick="roomAct(${visit.id}, '${next.action}')">${next.label}</button>` : '')}
+      ${big ? '' : (next ? `<button class="btn btn-primary" style="width:100%;padding:14px" onclick="roomAct(${visit.id}, '${next.action}')">${next.label}</button>` : '')}${big ? '' : skipBtn}
     </div>
     ${big ? `<div class="panel" style="margin-bottom:16px">
       ${next ? `<button class="btn btn-primary btn-huge" onclick="roomAct(${visit.id}, '${next.action}')">${next.label}</button>` : '<div class="empty-state">Waiting for the front desk.</div>'}
+      ${skipBtn}
       <div style="text-align:center;margin-top:14px;display:flex;justify-content:center;gap:10px;flex-wrap:wrap">
         ${flagButtonHtml(visit.id, visit.treatmentFlag)}
         ${cancelButtonHtml(visit.id)}
